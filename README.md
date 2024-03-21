@@ -6,6 +6,7 @@ Base:
 * catch22
 * tsfresh
 * scipy.signal
+* tsflex
 
 Added:
 * wavelet
@@ -24,3 +25,7 @@ Added:
 * [TiCC](https://github.com/davidhallac/TICC)
 * dtwclust
 * [LCMM](https://cran.r-project.org/web/packages/lcmm/lcmm.pdf)
+
+
+# Examples
+https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
