@@ -11,6 +11,11 @@ import numpy as np
 import pycatch22 
 from sktime.transformations.panel import catch22
 import tsfresh
+from tsfresh import extract_features, select_features, extract_relevant_features
+from tsfresh.utilities.dataframe_functions import impute
+from tsfresh.feature_extraction import ComprehensiveFCParameters
+
+
 from tqdm import tqdm
 import sys, os
 import pandas as pd 
@@ -42,6 +47,7 @@ class Extractor:
             mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend = \
                         self._mann_kendall_test(ts_data)
             wavelet_transform_feature = self._wavelet_transform_feature(ts_data)
+            psd_int = _psd_int(ts_data, integrator='trapezoidal')
             
             # Store the features for the current ID
             self.features[_id] = {
@@ -59,7 +65,8 @@ class Extractor:
                 'mann_kendall_slope': mk_slope,
                 'mann_kendall_intercept': mk_intercept,
                 'mann_kendall_trend': mk_trend,
-                'wavelet_transform_feature': wavelet_transform_feature
+                'wavelet_transform_feature': wavelet_transform_feature,
+                'psd_int': psd_int
             }
     
     def _mann_kendall_test(self, data):
@@ -88,9 +95,6 @@ class Extractor:
         return features_df
     
 
-from tsfresh import extract_features, select_features, extract_relevant_features
-from tsfresh.utilities.dataframe_functions import impute
-from tsfresh.feature_extraction import ComprehensiveFCParameters
 
 class TsFreshExtractor:
     def __init__(self):
@@ -131,13 +135,100 @@ class Catch22Extractor:
     def fit(self, df, id_col='id', val_col='value', time_col='dt'):
         # Extract features
         df = df.sort_values(by=[id_col, time_col])
+        _features = {}
         for _id in tqdm(df[id_col].unique()):
             ts_data = df[df[id_col] == _id][val_col].values
             extracted_features = pycatch22.catch22_all(ts_data)            
-            self.features[_id] = dict(zip(extracted_features['names'], extracted_features['values']))
+            _features[_id] = dict(zip(extracted_features['names'], extracted_features['values']))
+        self.features = _features
     
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, orient='index').reset_index()
-        features_df.rename(columns={'index': 'id'}, inplace=True)
+        features_df = pd.DataFrame.from_dict(self.features, 
+                                             orient='index').reset_index()
+        features_df = features_df.rename(columns={'index': 'id'})
+        features_df = features_df.set_index('id')
         return features_df
+    
+def get_smoothNsmooth_diffStatistics(ts_raw: pd.DataFrame, 
+                                     ts_smooth: pd.DataFrame,
+                                     id_col: str='ID',
+                                     val_col: str='value',
+                                     time_col: str='dt')->pd.DataFrame:
+    """
+    Get the difference statistics between raw time series and its smoothed version.
+    
+    Args:   ts_raw: np.array: raw time series
+            ts_smooth: np.array: smoothed time series
+            
+    Output: dict: difference statistics
+    """
+
+    tsM = ts_raw.merge(ts_smooth,
+                        left_on=[id_col, time_col],
+                        right_on=[id_col, time_col],
+                        suffixes=('_raw', '_smoothed'))
+    
+    tsM = tsM.assign(diff = tsM[val_col+"_raw"] - tsM[val_col+"_smoothed"])
+    diffg = tsM.groupby(id_col)['diff']         
+    diff_mean = diffg.aggregate(lambda x: np.mean(x))
+    diff_abs_mean = diffg.aggregate(lambda x: np.mean(np.abs(x)))
+    diff_abs_median = diffg.aggregate(lambda x: np.median(np.abs(x)))
+    diff_std = diffg.aggregate(lambda x: np.std(x))
+    diff_skew = diffg.aggregate(lambda x: skew(x))
+    diff_kurtosis = diffg.aggregate(lambda x: kurtosis(x))
+    
+    res = pd.concat([diff_mean, diff_abs_mean, diff_abs_median, 
+                     diff_std, diff_skew, diff_kurtosis], axis=1)
+    
+    res.columns = [f'diff{c}' for c in ['_mean', '_abs_mean', '_abs_median', 
+                                        '_std', '_skew', '_kurtosis']]
+    return res
+
+def _psd_int(ts_data, integrator='trapezoidal'):
+    """
+    Get the integral of the power spectral density of the time series.
+    
+    Args:   ts_data: np.array: time series data
+            integrator: str: integration technique ['trapezoidal' or 'weighted']
+            
+    Output: float: integral of the power spectral density
+    """
+    n_samples = len(ts_data)
+    base_num = min(n_samples, 512)
+    
+    f, Pxx = signal.welch(ts_data, fs=1.0, nperseg=base_num, noverlap=int(0.5*base_num), nfft=2*base_num)
+    if integrator == 'trapezoidal':
+        psd_int = np.trapz(Pxx, f)
+    elif integrator == 'weighted':
+        psd_int = sum(f[1:]*np.diff(f)*(Pxx[:-1]+Pxx[1:]))
+    else:
+        raise ValueError('Invalid integrator. Use "trapezoidal" or "weighted".')
+    return psd_int
+
+def psd_int(df: pd.DataFrame,
+            id_col: str='ID', 
+            val_col: str='value',
+            time_col: str='dt',
+            integrator: str='trapezoidal')->pd.DataFrame:
+    """
+    Get the integral of the power spectral density of the time series.
+    
+    Args:   df: pd.DataFrame: time series data frame
+            id_col: str: id column name
+            val_col: str: value column name
+            time_col: str: time column name
+            integrator: str: integration technique ['trapezoidal' or 'weighted']
+            
+    Output: pd.DataFrame: integral of the power spectral density
+    """
+    df = df.sort_values(by=[id_col, time_col])
+    res = {id_col: [], 'psd_int': []}
+    for _id in tqdm(df[id_col].unique()):
+        ts_data = df[df[id_col] == _id][val_col].values
+        
+        psd_int = _psd_int(ts_data, integrator=integrator)
+        res[id_col].append(_id)
+        res['psd_int'].append(psd_int)
+    
+    return pd.DataFrame(res)
