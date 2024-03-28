@@ -15,6 +15,7 @@ from tsfresh import extract_features, select_features, extract_relevant_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.feature_extraction import ComprehensiveFCParameters
 
+from cesium import featurize
 
 from tqdm import tqdm
 import sys, os
@@ -25,6 +26,71 @@ import gc
 from collections import defaultdict
 
 from time import sleep
+
+    
+# add Cesium features
+DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
+                          "median_absolute_deviation", "percent_close_to_median",
+                          "weighted_average", "all_times_nhist_numpeaks", 
+                          "all_times_nhist_peak_1_to_2", "all_times_nhist_peak_val",
+                          "avg_double_to_single_step", "avg_err", "avgt",
+                          "anderson_darling",  "shapiro_wilk"]
+
+def get_crossectional(tsdf: pd.DataFrame,
+                      id_col='ID',
+                      val_col='eGFR_CKDEpi2012', 
+                      time_col='Time_col', 
+                      catch22=False, 
+                      cesium=False):
+
+    CustomExtractor = Extractor()
+    CustomExtractor.fit(tsdf, 
+                        id_col=id_col, 
+                        val_col=val_col, 
+                        time_col=time_col)
+
+    ts_data_agg = CustomExtractor.transform()
+
+    FreshExtractor = TsFreshExtractor()
+    FreshExtractor.fit(tsdf, 
+                        id_col=id_col, 
+                        val_col=val_col,
+                        time_col=time_col)
+    ts_data_agg_fresh = FreshExtractor.transform()
+
+
+    if catch22==True:
+        Catch22Extract  = Catch22Extractor()
+        Catch22Extract.fit(tsdf, 
+                    id_col=id_col, 
+                    val_col=val_col,
+                    time_col=time_col)
+        ts_data_agg_catch22 = Catch22Extract.transform()
+
+    if cesium==True:
+        CesiumExtract = CesiumExtractor()
+        CesiumExtract.fit(tsdf, 
+                            id_col=id_col, 
+                            val_col=val_col,
+                            time_col=time_col)
+        ts_data_agg_cesium = CesiumExtract.transform()
+
+    ts_data_agg = ts_data_agg.set_index('id')
+
+    FINAL_FEATURES = ts_data_agg.merge(ts_data_agg_fresh,
+                                       left_index=True,
+                                       right_index=True)
+    if catch22==True:
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_catch22,
+                                              left_index=True,
+                                              right_index=True)
+    
+    if cesium==True:
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_cesium,
+                                              left_index=True,
+                                              right_index=True)    
+    
+    return FINAL_FEATURES
 
 class Extractor:
     def __init__(self):
@@ -150,6 +216,58 @@ class Catch22Extractor:
         features_df = features_df.set_index('id')
         return features_df
     
+
+class CesiumExtractor:
+    def __init__(self, 
+                 features_to_use=None, 
+                 extract_periodic_features=True,
+                 extract_cad_features=False):
+        self.features = {}
+        self.features_to_use = features_to_use if features_to_use \
+                                    else DEFAULT_CESIUM_FEATURES
+
+        if extract_periodic_features:
+            self.features_to_use += ["period_fast", "freq1_freq", "freq2_freq", 
+                                     "freq3_freq", "linear_trend","freq1_rel_phase2", 
+                                     "freq2_rel_phase2", "freq3_rel_phase2"]
+            
+        if extract_cad_features:
+            self.features_to_use += ["cad_probs_10", "cad_probs_30", "cad_probs_100", 
+                                     "cad_probs_500", "cads_avg"]
+
+    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+        df = df.sort_values(by=[id_col, time_col])
+        _features = {}
+
+        for _id in tqdm(df[id_col].unique()):
+            times = df[df[id_col] == _id][time_col].values
+            vals = df[df[id_col] == _id][val_col].values
+            feats = featurize.featurize_time_series(
+                                            times=times,
+                                            values=vals,
+                                            errors=None,
+                                            features_to_use=self.features_to_use,
+                                            )
+            feats.columns = feats.columns.droplevel(-1)
+            feats_dict = feats.to_dict()
+            _features[_id] = {k:v[0] for k,v in feats_dict.items()}
+        self.features = _features
+
+    def transform(self):
+        # Convert the features dictionary to a DataFrame
+        features_df = pd.DataFrame.from_dict(self.features, 
+                                             orient='index').reset_index()
+        features_df = features_df.rename(columns={'index': 'id'})
+        features_df = features_df.set_index('id')
+        return features_df
+
+# TODO: Implement the KatzExtractor class
+class KatzExtractor:
+    # https://github.com/facebookresearch/Kats/blob/main/tutorials/kats_203_tsfeatures.ipynb
+    # https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
+    pass
+
+
 def get_smoothNsmooth_diffStatistics(ts_raw: pd.DataFrame, 
                                      ts_smooth: pd.DataFrame,
                                      id_col: str='ID',

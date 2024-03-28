@@ -19,28 +19,57 @@ import gc
 from collections import defaultdict
 from time import sleep
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+from sklego.meta.grouped_transformer import GroupedTransformer
 
 
 from tslearn import metrics
 
-def normalise_ts(ts_df, id_col='ID', val_col='eGFR_CKDEpi2012'):
+def normalise_ts(ts_df, id_col='ID', 
+                 time_col='Time_days', 
+                 val_col='eGFR_CKDEpi2012',
+                 df_out=False):
+    # TODO: implement normalisation of time series data PER ID
     scaler = TimeSeriesScalerMeanVariance()
-    ts = ts_df[val_col].values
-    ts = ts.reshape(1, -1, 1)
-    ts = scaler.fit_transform(ts)
-    ts = ts.reshape(-1)
-    ts_df[val_col] = ts
-    return ts_df
+    
+    #group_scaler = GroupedTransformer(scaler, groups=id_col)
+    #ts_df[val_col] = group_scaler.fit_transform(ts_df)    
+    
+    res = {id_col: [], time_col: [], val_col: []}
+    for _id in tqdm(ts_df[id_col].unique()):
+        _df = ts_df.loc[ts_df[id_col]==_id][[id_col, time_col, val_col]]
+        ts = _df[val_col].values
+        ts = ts.reshape(1, -1, 1)
+        ts = scaler.fit_transform(ts)
+        ts = ts.reshape(-1)
+        _df[val_col] = ts
+        
+        res[id_col].extend(_df[id_col].values)
+        res[time_col].extend(_df[time_col].values)
+        res[val_col].extend(_df[val_col].values)
+    if df_out:
+        return pd.DataFrame(res)
+    else:
+        return res
 
-def get_filtered_df(ts_df, id_col='ID', time_col='Time_days', min_days=365):
+def get_filtered_df(ts_df, 
+                    id_col='ID',
+                    time_col='Time_days', 
+                    min_days=365, 
+                    min_measurements=3):
     maxts = ts_df.groupby(id_col)[time_col].max()
     ltids = maxts[maxts>min_days].index
     
-    ts = ts_df.loc[ts_df[id_col].isin(ltids)]
+    
+    cnts = ts_df[(ts_df[id_col].isin(ltids)) &
+                 (ts_df[time_col]<365)].groupby(id_col).size()
+    filtered_ids = cnts[cnts>3].index
+    
+    ts = ts_df.loc[ts_df[id_col].isin(filtered_ids)]
     return ts
 
 def get_interpolated(ts_df, id_col='ID', time_col='Time_days',
-                     val_col='eGFR_CKDEpi2012', max_days=365, time_res=7):
+                     val_col='eGFR_CKDEpi2012', 
+                     max_days=365, time_res=7, df_out=False):
     # use monotonic cubic splines
     trange = np.arange(0, max_days, time_res)
     
@@ -58,10 +87,13 @@ def get_interpolated(ts_df, id_col='ID', time_col='Time_days',
         res[time_col].extend(trange)
         res[val_col].extend(interpolated)
     
-    return res
+    if df_out:
+        return pd.DataFrame.from_dict(res, orient='columns')
+    else:
+        return res
 
 def get_smoothed_rolling_mean(ts_dict: dict, id_col='ID', time_col='Time_days',
-                        val_col='eGFR_CKDEpi2012', window=5):
+                        val_col='eGFR_CKDEpi2012', window=5, df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     
     ts_df = pd.DataFrame.from_dict(ts_dict)
@@ -73,10 +105,13 @@ def get_smoothed_rolling_mean(ts_dict: dict, id_col='ID', time_col='Time_days',
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
         res[val_col].extend(_df[val_col].values)
-    return res
+    if df_out:
+        return pd.DataFrame.from_dict(res, orient='columns')
+    else:
+        return res
 
 def get_smoothed_gaussian_kernel(ts_dict: dict, id_col='ID', time_col='Time_days',
-                        val_col='eGFR_CKDEpi2012', window=5):
+                        val_col='eGFR_CKDEpi2012', window=5, df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     
     ts_df = pd.DataFrame.from_dict(ts_dict)
@@ -88,13 +123,16 @@ def get_smoothed_gaussian_kernel(ts_dict: dict, id_col='ID', time_col='Time_days
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
         res[val_col].extend(_df[val_col].values)
-    return res
+    if df_out:
+        return pd.DataFrame.from_dict(res, orient='columns')
+    else:
+        return res
 
 
 # perform low pass filtering
 def get_low_pass_filtered(ts_dict: dict, id_col='ID', time_col='Time_days',
                         val_col='eGFR_CKDEpi2012', cutoff=0.25, stationary=True,
-                        order=1, btype='low', window=3):
+                        order=1, btype='low', window=3, df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     '''
     Should normaly only be applied for uniformly sampled time series that 
@@ -137,5 +175,8 @@ def get_low_pass_filtered(ts_dict: dict, id_col='ID', time_col='Time_days',
             res[time_col].extend(_df[time_col].values)
             res[val_col].extend(retrended)       
     
-    return res
+    if df_out:
+        return pd.DataFrame.from_dict(res, orient='columns')
+    else:
+        return res
     
