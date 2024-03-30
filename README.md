@@ -1,26 +1,35 @@
 # TimEx
-Repository for extracting time-series features
+Repository for extracting time-series features and clusters
 
-# Features
-Base:
+# **Crossectional feature extraction** (CFE)
+Using
 * catch22
 * tsfresh
-* scipy.signal
 * tsflex
+* kats
+* cesium
+* CNN/RNN based bottlenecks
+* LLM-based bottlenecks
+* Custom functions:
+  * Added:
+  * wavelet
+  * FFT
+  * Mann-Kendall
+  * Time2Vec
 
-Added:
-* wavelet
-* FFT
-* Mann-Kendall
-* Time2Vec
+# **Cross-section distance matrices** (CsDM):
+Using
 
-# Distance
-
-* log rank
-* DTW
-* CTW
+# **Timeseries distance matrices** (TDM):
+Using 
+* tslearn
+* sktime
+* Custom:
+  * log rank
+  * distance correlation
 
 # Cluster
+
 * [MPF](https://matrixprofile.docs.matrixprofile.org/examples/Hierarchical_Clustering_Accelerometer_Walk_Stand_etc.html)
 * [TiCC](https://github.com/davidhallac/TICC)
 * dtwclust
