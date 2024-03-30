@@ -2,11 +2,12 @@
 Repository for extracting time-series features and clusters
 
 # **Crossectional feature extraction** (CFE)
-Using
+Using features  from
 * catch22
 * tsfresh
-* tsflex
 * kats
+* antropy
+* nolds
 * cesium
 * CNN/RNN based bottlenecks
 * LLM-based bottlenecks
@@ -15,7 +16,9 @@ Using
   * wavelet
   * FFT
   * Mann-Kendall
-  * Time2Vec
+ 
+ 
+TODO:  use tsflex to improve performance of feature  extraction.
 
 # **Cross-section distance matrices** (CsDM):
 Using
