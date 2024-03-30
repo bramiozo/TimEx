@@ -41,3 +41,9 @@ Using
 
 # Examples
 https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
+
+
+# Acknowledgments
+
+* https://github.com/nikdon/pyEntropy
+  
