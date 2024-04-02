@@ -15,19 +15,31 @@ from tsfresh import extract_features, select_features, extract_relevant_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.feature_extraction import ComprehensiveFCParameters
 
+
+import antropy as ant
 from cesium import featurize
 
 from tqdm import tqdm
 import sys, os
 import pandas as pd 
 
+from numba import jit
 import gc
 
 from collections import defaultdict
 
 from time import sleep
 
+import antropy as ant
+import nolds
+
+#TODO: add interpretable feature mappings 
+# e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}} 
     
+## Ideas for extracts
+# 'complexity': how many fourier components are needed to describe the signal with a certain accuracy
+# 'complexity': spline complexity, how many splines are needed to describe the signal with a certain accuracy
+
 # add Cesium features
 DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
                           "median_absolute_deviation", "percent_close_to_median",
@@ -36,12 +48,30 @@ DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std",
                           "avg_double_to_single_step", "avg_err", "avgt",
                           "anderson_darling",  "shapiro_wilk"]
 
+ANTROPY_FEATURES = [
+                    "perm_entropy",
+                    "spectral_entropy",
+                    "svd_entropy",
+                    "app_entropy",
+                    "sample_entropy",
+                    "lziv_complexity",
+                    "num_zerocross",
+                    "hjorth_params",
+                    "petrosian_fd", 
+                    "katz_fd", 
+                    "higuchi_fd", 
+                    "detrended_fluctuation"
+                ]
+
+
 def get_crossectional(tsdf: pd.DataFrame,
                       id_col='ID',
                       val_col='eGFR_CKDEpi2012', 
                       time_col='Time_col', 
-                      catch22=False, 
-                      cesium=False):
+                      catch22_features=False, 
+                      cesium_features=False,
+                      antropy_features=False,
+                      nolds_features=False):
 
     CustomExtractor = Extractor()
     CustomExtractor.fit(tsdf, 
@@ -59,7 +89,7 @@ def get_crossectional(tsdf: pd.DataFrame,
     ts_data_agg_fresh = FreshExtractor.transform()
 
 
-    if catch22==True:
+    if catch22_features==True:
         Catch22Extract  = Catch22Extractor()
         Catch22Extract.fit(tsdf, 
                     id_col=id_col, 
@@ -67,29 +97,59 @@ def get_crossectional(tsdf: pd.DataFrame,
                     time_col=time_col)
         ts_data_agg_catch22 = Catch22Extract.transform()
 
-    if cesium==True:
+    if cesium_features==True:
         CesiumExtract = CesiumExtractor()
         CesiumExtract.fit(tsdf, 
                             id_col=id_col, 
                             val_col=val_col,
                             time_col=time_col)
         ts_data_agg_cesium = CesiumExtract.transform()
+    
+    if antrop_features==True:
+        AntropyExtract = AntropyExtractor()
+        AntropyExtract.fit(tsdf, 
+                            id_col=id_col, 
+                            val_col=val_col,
+                            time_col=time_col)
+        ts_data_agg_antropy = AntropyExtract.transform()
+    
+    if nolds_features==True:
+        NoldsExtract = NoldsExtractor()
+        NoldsExtract.fit(tsdf, 
+                            id_col=id_col, 
+                            val_col=val_col,
+                            time_col=time_col)
+        ts_data_agg_nolds = NoldsExtract.transform()
 
     ts_data_agg = ts_data_agg.set_index('id')
 
     FINAL_FEATURES = ts_data_agg.merge(ts_data_agg_fresh,
                                        left_index=True,
-                                       right_index=True)
-    if catch22==True:
+                                       right_index=True,
+                                       suffixes=('_custom', '_fresh'))
+    if catch22_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_catch22,
                                               left_index=True,
-                                              right_index=True)
+                                              right_index=True,
+                                              right_suffix='_catch22')
     
-    if cesium==True:
+    if cesium_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_cesium,
                                               left_index=True,
-                                              right_index=True)    
+                                              right_index=True,
+                                              right_suffix='_cesium')
     
+    if antropy_features==True:
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_antropy,
+                                              left_index=True,
+                                              right_index=True,
+                                              right_suffix='_antropy')
+    if nolds_features==True:
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_nolds,
+                                              left_index=True,
+                                              right_index=True,
+                                              right_suffix='_nolds')
+           
     return FINAL_FEATURES
 
 class Extractor:
@@ -97,6 +157,7 @@ class Extractor:
         self.features = {}
     
     def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+        #TODO: streamline kwargs for internal functions...
         df = df.sort_values(by=[id_col, time_col])
         # Iterate over all unique IDs in the DataFrame
         for _id in tqdm(df[id_col].unique()):
@@ -110,6 +171,14 @@ class Extractor:
             variance = np.var(ts_data)
             skewness = skew(ts_data)
             kurtosis_value = kurtosis(ts_data)
+            
+            entropy_per_rel = get_spectral_entropy(ts_data, freq=1)
+            entropy_rel = get_relative_entropy(ts_data)
+            lumpiness = get_lumpiness(ts_data, window_size=8)
+            lump_stability = get_stability(ts_data, window_size=8)
+            hurst_exponent = get_hurst(ts_data, lag_size=8)            
+            rel_slope_sign_switch_sum = get_slope_sign_switch_sum(ts_data)
+                        
             mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend = \
                         self._mann_kendall_test(ts_data)
             wavelet_transform_feature = self._wavelet_transform_feature(ts_data)
@@ -123,6 +192,11 @@ class Extractor:
                 'variance': variance,
                 'skewness': skewness,
                 'kurtosis': kurtosis_value,
+                'entropy_per_rel': entropy_per_rel,
+                'entropy_rel': entropy_rel,
+                'lumpiness': lumpiness,
+                'lump_stability': lump_stability,
+                'hurst_exponent': hurst_exponent,
                 'mann_kendall_s': mk_s,
                 'mann_kendall_z': mk_z,
                 'mann_kendall_Tau': mk_Tau,
@@ -132,7 +206,8 @@ class Extractor:
                 'mann_kendall_intercept': mk_intercept,
                 'mann_kendall_trend': mk_trend,
                 'wavelet_transform_feature': wavelet_transform_feature,
-                'psd_int': psd_int
+                'psd_int': psd_int,
+                'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum
             }
     
     def _mann_kendall_test(self, data):
@@ -226,12 +301,12 @@ class CesiumExtractor:
         self.features_to_use = features_to_use if features_to_use \
                                     else DEFAULT_CESIUM_FEATURES
 
-        if extract_periodic_features:
+        if extract_periodic_features==True:
             self.features_to_use += ["period_fast", "freq1_freq", "freq2_freq", 
                                      "freq3_freq", "linear_trend","freq1_rel_phase2", 
                                      "freq2_rel_phase2", "freq3_rel_phase2"]
             
-        if extract_cad_features:
+        if extract_cad_features==True:
             self.features_to_use += ["cad_probs_10", "cad_probs_30", "cad_probs_100", 
                                      "cad_probs_500", "cads_avg"]
 
@@ -260,11 +335,132 @@ class CesiumExtractor:
         features_df = features_df.rename(columns={'index': 'id'})
         features_df = features_df.set_index('id')
         return features_df
+    
+    
+class AntropyExtractor:
+    def __init__(self,  
+                 features_to_use: list=None):
+                self.features_to_use = features_to_use if features_to_use \
+                                            else ANTROPY_FEATURES
+    @staticmethod
+    def tsfeatures(ts_data, features_to_use: list=None):
+        res = {}
+        for f in features_to_use:
+            if f == 'perm_entropy':
+                res[f] = ant.perm_entropy(ts_data)
+            elif f == 'spectral_entropy':
+                res[f] = ant.spectral_entropy(ts_data)
+            elif f == 'svd_entropy':
+                res[f] = ant.svd_entropy(ts_data)
+            elif f == 'app_entropy':
+                res[f] = ant.app_entropy(ts_data)
+            elif f == 'sample_entropy':
+                res[f] = ant.sample_entropy(ts_data)
+            elif f == 'lziv_complexity':
+                res[f] = ant.lziv_complexity(ts_data)
+            elif f == 'num_zerocross':
+                res[f] = ant.num_zerocross(ts_data)
+            elif f == 'hjorth_params':
+                hjorth = ant.hjorth(ts_data)
+                res['activity'] = hjorth[0]
+                res['mobility'] = hjorth[1]
+                res['complexity'] = hjorth[2]
+            elif f == 'petrosian_fd':
+                res[f] = ant.petrosian_fd(ts_data)
+            elif f == 'katz_fd':
+                res[f] = ant.katz_fd(ts_data)
+            elif f == 'higuchi_fd':
+                res[f] = ant.higuchi_fd(ts_data)
+            elif f == 'detrended_fluctuation':
+                res[f] = ant.detrended_fluctuation(ts_data)
+        
+        return res 
+     
+    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+        assert(self.features_to_use is not None), "Please provide a list of features to use"
+        df = df.sort_values(by=[id_col, time_col])
+        _features = {}
+        for _id in tqdm(df[id_col].unique()):
+            ts_data = df[df[id_col] == _id][val_col].values
+            feats = self.tsfeatures(ts_data, features_to_use=self.features_to_use)
+            _features[_id] = feats
+        self.features = _features
+
+    def transform(self):
+        # Convert the features dictionary to a DataFrame
+        features_df = pd.DataFrame.from_dict(self.features, 
+                                             orient='index').reset_index()
+        features_df = features_df.rename(columns={'index': 'id'})
+        features_df = features_df.set_index('id')
+        return features_df
+
+
+class NoldsExtractor:
+    def __init__(self, 
+                 features_to_use: list=None,
+                 emb_dims=[1,2,3,4],
+                 min_ts_len=100):
+        self.emb_dims = [1,2,3,4] if emb_dims is None else emb_dims
+        self.features_to_use = features_to_use if features_to_use \
+                                else ['lyap_e', 'corr_dim']
+    
+    @staticmethod
+    def tsfeatures(ts_data, features_to_use: list=None, min_len=50):
+        res = {}
+        for f in features_to_use:
+            if f == 'lyap_e':
+                if ts_data.shape[0] < min_len:
+                    v_ = np.tile(ts_data, min_len//ts_data.shape[0] + 1)
+                else:
+                    v_ = ts_data       
+                _res = nolds.lyap_e(v_)
+                for nd, res_ in enumerate(_res):
+                    res[f'lyap_e_{nd}'] = res_
+            elif f == 'corr_dim':
+                for edim in self.emb_dims:
+                    res[f'corr_dim_{edim}'] = nolds.corr_dim(ts_data, emb_dim=edim)
+        return res
+    
+    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+        assert(self.features_to_use is not None), "Please provide a list of features to use"
+        df = df.sort_values(by=[id_col, time_col])
+        _features = {}
+        for _id in tqdm(df[id_col].unique()):
+            ts_data = df[df[id_col] == _id][val_col].values
+            feats = self.tsfeatures(ts_data, 
+                                    features_to_use=self.features_to_use,
+                                    min_len=self.min_ts_len)
+            _features[_id] = feats
+        self.features = _features
+
+    def transform(self):
+        # Convert the features dictionary to a DataFrame
+        features_df = pd.DataFrame.from_dict(self.features, 
+                                             orient='index').reset_index()
+        features_df = features_df.rename(columns={'index': 'id'})
+        features_df = features_df.set_index('id')
+        return features_df
 
 # TODO: Implement the KatzExtractor class
 class KatzExtractor:
     # https://github.com/facebookresearch/Kats/blob/main/tutorials/kats_203_tsfeatures.ipynb
     # https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
+    
+    # TsFeatures.get_linearity
+    # TsFeatures.get_het_arch
+    # TsFeatures.get_stl_features
+    # TsFeatures.get_acf_features
+    # TsFeatures.get_flat_spots
+    # TsFeatures.get_pacf_features
+    # TsFeatures.get_acfpacf_features
+    # TsFeatures.get_unitroot_kpss
+    # TsFeatures.get_holt_params
+    # TsFeatures.get_cusum_detector
+    # TsFeatures.get_trend_detector
+    
+    pass
+
+class TSFelExtractor:
     pass
 
 
@@ -350,3 +546,117 @@ def psd_int(df: pd.DataFrame,
         res['psd_int'].append(psd_int)
     
     return pd.DataFrame(res)
+
+@jit(forceobj=True)
+def get_spectral_entropy(x: np.ndarray, freq: int = 1) -> float:
+    """
+    source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
+    Getting normalized Shannon entropy of power spectral density.
+    PSD is calculated using scipy's periodogram.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        freq: int; Frequency for calculating the PSD via scipy periodogram.
+
+    Returns:
+        Normalized Shannon entropy.
+    """
+
+    # calculate periodogram
+    _, psd = periodogram(x, freq)
+
+    # calculate shannon entropy of normalized psd
+    psd_norm = psd / np.sum(psd)
+    entropy = np.nansum(psd_norm * np.log2(psd_norm))
+
+    return -(entropy / np.log2(psd_norm.size))
+
+@jit(forceobj=True)
+def get_relative_entropy(x: np.ndarray) -> float:
+    """
+    source: entropy of continuous values relative to maximum entropy
+    """
+    # calculate the entropy of the time series
+    entropy = np.entropy(x)
+    # calculate the maximum entropy
+    max_entropy = np.log2(len(x))
+    # calculate the relative entropy
+    rel_entropy = entropy / max_entropy
+    return rel_entropy
+
+@jit(forceobj=True)
+def get_lumpiness(x: np.ndarray, window_size: int = 8) -> float:
+    """
+    source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
+        
+    Calculating the lumpiness of time series.
+    Lumpiness is defined as the variance of the chunk-wise variances.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        window_size: int; Window size to split the data into chunks for getting
+            variances. Default value is 8.
+
+    Returns:
+        Lumpiness of the time series array.
+    """
+
+    v = [np.var(x_w) for x_w in np.array_split(x, len(x) // window_size + 1)]
+    return np.var(v)
+
+# stability
+@jit(forceobj=True)
+def get_stability(x: np.ndarray, window_size: int = 8) -> float:
+    """
+    source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
+
+    Calculate the stability of time series.
+    Stability is defined as the variance of chunk-wise means.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        window_size: int; Window size to split the data into chunks for getting
+            variances. Default value is 8.
+
+    Returns:
+        Stability of the time series array.
+    """
+
+    v = [np.mean(x_w) for x_w in np.array_split(x, len(x) // window_size + 1)]
+    return np.var(v)
+
+
+@jit(forceobj=True)
+def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
+    """
+    Getting: Hurst Exponent wiki: https://en.wikipedia.org/wiki/Hurst_exponent
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        lag_size: int; Size for getting lagged time series data.
+
+    Returns:
+        The Hurst Exponent of the time series array
+    """
+
+    # Create the range of lag values
+    lags = range(2, min(lag_size, len(x) - 1))
+
+    # Calculate the array of the variances of the lagged differences
+    tau = [np.std(np.asarray(x)[lag:] - np.asarray(x)[:-lag]) for lag in lags]
+
+    # Use a linear fit to estimate the Hurst Exponent
+    poly = np.polyfit(np.log(lags), np.log(tau), 1)
+
+    # Return the Hurst exponent from the polyfit output
+    return poly[0] if not np.isnan(poly[0]) else 0
+
+def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
+    """
+    Get the sum of the number of times the slope of the time series changes sign.
+    
+    Args:   ts_data: np.array: time series data
+            
+    Output: float: sum of the number of times the slope of the time series changes sign
+    """
+    return np.sum(np.diff(np.sign(np.diff(ts_data))) != 0)/len(ts_data)
