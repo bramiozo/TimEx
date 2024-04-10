@@ -25,8 +25,8 @@ from pytwed import twed
 import dcor
 
 #from tslearn.clustering import GlobalAlignmentKernelKMeans, TimeSeriesKMeans, KernelKMeans
-from tslearn.metrics import gak, dtw, lcss, dtw_path,  soft_dtw, ctw, 
-from tslearn.metrics import cdist_soft_dtw, cdist_soft_dtw_normalized, 
+from tslearn.metrics import gak, dtw, lcss, dtw_path,  soft_dtw, ctw
+from tslearn.metrics import cdist_soft_dtw, cdist_soft_dtw_normalized
 from tslearn.metrics import cdist_dtw, cdist_gak, cdist_lcss, cdist_ctw
 from tslearn.generators import random_walks
 from tslearn.utils import to_time_series_dataset

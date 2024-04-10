@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
-from scipy.stats import skew, kurtosis
+
+from scipy.stats import skew, kurtosis, entropy as _entropy, linregress
 from scipy.fft import rfft, rfftfreq
-from scipy.signal import cwt, ricker
+from scipy.signal import cwt, ricker, periodogram
+from scipy import signal
+
 import pymannkendall as mk
 from tqdm import tqdm
 
-from scipy import signal
-import numpy as np
 import pycatch22 
 from sktime.transformations.panel import catch22
 import tsfresh
@@ -15,6 +16,8 @@ from tsfresh import extract_features, select_features, extract_relevant_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.feature_extraction import ComprehensiveFCParameters
 
+from statsmodels.tsa.seasonal import STL
+from statsmodels.tsa.stattools import acf, kpss, pacf
 
 import antropy as ant
 from cesium import featurize
@@ -68,6 +71,7 @@ def get_crossectional(tsdf: pd.DataFrame,
                       id_col='ID',
                       val_col='eGFR_CKDEpi2012', 
                       time_col='Time_col', 
+                      tsfresh_features=False,
                       catch22_features=False, 
                       cesium_features=False,
                       antropy_features=False,
@@ -81,12 +85,13 @@ def get_crossectional(tsdf: pd.DataFrame,
 
     ts_data_agg = CustomExtractor.transform()
 
-    FreshExtractor = TsFreshExtractor()
-    FreshExtractor.fit(tsdf, 
-                        id_col=id_col, 
-                        val_col=val_col,
-                        time_col=time_col)
-    ts_data_agg_fresh = FreshExtractor.transform()
+    if tsfresh_features ==True:
+        FreshExtractor = TsFreshExtractor()
+        FreshExtractor.fit(tsdf, 
+                            id_col=id_col, 
+                            val_col=val_col,
+                            time_col=time_col)
+        ts_data_agg_fresh = FreshExtractor.transform()
 
 
     if catch22_features==True:
@@ -105,7 +110,7 @@ def get_crossectional(tsdf: pd.DataFrame,
                             time_col=time_col)
         ts_data_agg_cesium = CesiumExtract.transform()
     
-    if antrop_features==True:
+    if antropy_features==True:
         AntropyExtract = AntropyExtractor()
         AntropyExtract.fit(tsdf, 
                             id_col=id_col, 
@@ -123,32 +128,36 @@ def get_crossectional(tsdf: pd.DataFrame,
 
     ts_data_agg = ts_data_agg.set_index('id')
 
-    FINAL_FEATURES = ts_data_agg.merge(ts_data_agg_fresh,
-                                       left_index=True,
-                                       right_index=True,
-                                       suffixes=('_custom', '_fresh'))
+    _cstring = '_custom'
+    if tsfresh_features==True:        
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_fresh,
+                                        left_index=True,
+                                        right_index=True,
+                                        suffixes=('_custom', '_fresh'))
+        _cstring = ''
+        
     if catch22_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_catch22,
                                               left_index=True,
                                               right_index=True,
-                                              right_suffix='_catch22')
+                                              suffixes=(_cstring,'_catch22'))
     
     if cesium_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_cesium,
                                               left_index=True,
                                               right_index=True,
-                                              right_suffix='_cesium')
+                                              suffixes=(_cstring,'_cesium'))
     
     if antropy_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_antropy,
                                               left_index=True,
                                               right_index=True,
-                                              right_suffix='_antropy')
+                                              suffixes=(_cstring,'_antropy'))
     if nolds_features==True:
         FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_nolds,
                                               left_index=True,
                                               right_index=True,
-                                              right_suffix='_nolds')
+                                              suffixes=(_cstring, '_nolds'))
            
     return FINAL_FEATURES
 
@@ -180,8 +189,8 @@ class Extractor:
             rel_slope_sign_switch_sum = get_slope_sign_switch_sum(ts_data)
                         
             mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend = \
-                        self._mann_kendall_test(ts_data)
-            wavelet_transform_feature = self._wavelet_transform_feature(ts_data)
+                        _mann_kendall_test(ts_data)
+            wavelet_transform_feature = _wavelet_transform_feature(ts_data)
             psd_int = _psd_int(ts_data, integrator='trapezoidal')
             
             # Store the features for the current ID
@@ -209,26 +218,7 @@ class Extractor:
                 'psd_int': psd_int,
                 'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum
             }
-    
-    def _mann_kendall_test(self, data):
-        n = len(data)
-        s = 0
-        for i in range(n-1):
-            for j in range(i+1, n):
-                s += np.sign(data[j] - data[i])
-                
-        trend, _, _, z, Tau, s, var_s, slope, intercept = mk.original_test(data)
-        trend = 1 if trend == 'increasing' else -1 if trend == 'decreasing' else 0        
-        return s/n, z, Tau, s, var_s, slope, intercept, trend
-
-    def _wavelet_transform_feature(self, data):
-        # This is a placeholder for a real wavelet transform feature extraction.
-        # For simplicity, we return the mean of the wavelet coefficients here.
-        # Replace this with your actual wavelet feature extraction logic.
-        widths = np.arange(1, 31)
-        cwtmatr = cwt(data, ricker, widths)
-        return np.mean(cwtmatr)
-    
+        
     def transform(self):
         # Convert the features dictionary to a DataFrame
         features_df = pd.DataFrame.from_dict(self.features, orient='index').reset_index()
@@ -446,9 +436,11 @@ class KatzExtractor:
     # https://github.com/facebookresearch/Kats/blob/main/tutorials/kats_203_tsfeatures.ipynb
     # https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
     
-    # TsFeatures.get_linearity
-    # TsFeatures.get_het_arch
-    # TsFeatures.get_stl_features
+
+    
+    # get_linearity
+    # get_het_arch
+    # get_stl_features
     # TsFeatures.get_acf_features
     # TsFeatures.get_flat_spots
     # TsFeatures.get_pacf_features
@@ -457,6 +449,8 @@ class KatzExtractor:
     # TsFeatures.get_holt_params
     # TsFeatures.get_cusum_detector
     # TsFeatures.get_trend_detector
+    
+    
     
     pass
 
@@ -577,7 +571,7 @@ def get_relative_entropy(x: np.ndarray) -> float:
     source: entropy of continuous values relative to maximum entropy
     """
     # calculate the entropy of the time series
-    entropy = np.entropy(x)
+    entropy = _entropy(x)
     # calculate the maximum entropy
     max_entropy = np.log2(len(x))
     # calculate the relative entropy
@@ -651,6 +645,7 @@ def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
     # Return the Hurst exponent from the polyfit output
     return poly[0] if not np.isnan(poly[0]) else 0
 
+@jit(forceobj=True)
 def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
     """
     Get the sum of the number of times the slope of the time series changes sign.
@@ -660,3 +655,118 @@ def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
     Output: float: sum of the number of times the slope of the time series changes sign
     """
     return np.sum(np.diff(np.sign(np.diff(ts_data))) != 0)/len(ts_data)
+
+@jit(forceobj=True)
+def get_linearity(x: np.ndarray) -> float:
+    """
+    Compute linearity feature: R square from a fitted linear regression.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+
+    Returns:
+        R square from a fitted linear regression.
+    """
+
+    _, _, r_value, _, _ = stats.linregress(np.arange(len(x)), x)
+    return r_value**2
+
+
+def _mann_kendall_test(data: np.ndarray) -> float:
+    n = len(data)
+    s = 0
+    for i in range(n-1):
+        for j in range(i+1, n):
+            s += np.sign(data[j] - data[i])
+            
+    trend, _, _, z, Tau, s, var_s, slope, intercept = mk.original_test(data)
+    trend = 1 if trend == 'increasing' else -1 if trend == 'decreasing' else 0        
+    return s/n, z, Tau, s, var_s, slope, intercept, trend
+
+@jit(forceobj=True)
+def _wavelet_transform_feature(data: np.ndarray) -> float:
+    # This is a placeholder for a real wavelet transform feature extraction.
+    # For simplicity, we return the mean of the wavelet coefficients here.
+    # Replace this with your actual wavelet feature extraction logic.
+    widths = np.arange(1, 31)
+    cwtmatr = cwt(data, ricker, widths)
+    return np.mean(cwtmatr)
+
+@jit(forceobj=True)
+def get_het_arch(x: np.ndarray) -> float:
+    """
+    Compute Engle's test for autogregressive Conditional Heteroscedasticity (ARCH).
+
+    reference: https://www.statsmodels.org/dev/generated/statsmodels.stats.diagnostic.het_arch.html
+    Engle’s Test for Autoregressive Conditional Heteroscedasticity (ARCH)
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+
+    Returns:
+        Lagrange multiplier test statistic
+    """
+
+    return het_arch(x, nlags=min(10, len(x) // 5))[0]
+
+@jit(forceobj=True)
+def get_stl_features(
+    x: np.ndarray,
+    period: int = 7,
+    extra_args: Optional[Dict[str, bool]] = None,
+    default_status: bool = True,
+) -> Dict[str, float]:
+    """
+    Calculate STL based features for a time series.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        period: int; Period parameter for performing seasonality trend
+            decomposition using LOESS with statsmodels.
+        extra_args: A dictionary containing information for disabling
+            calculation of a certain feature. If None, no feature is
+            disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+
+    Returns:
+        Seasonality features including strength of trend, seasonality,
+        spikiness, peak/trough.
+    """
+
+    stl_features = {}
+
+    # STL decomposition
+    res = STL(x, period=period).fit()
+
+    # strength of trend
+    if extra_args is not None and extra_args.get("trend_strength", default_status):
+        stl_features["trend_strength"] = 1 - np.var(res.resid) / np.var(
+            res.trend + res.resid
+        )
+
+    # strength of seasonality
+    if extra_args is not None and extra_args.get(
+        "seasonality_strength", default_status
+    ):
+        stl_features["seasonality_strength"] = 1 - np.var(res.resid) / np.var(
+            res.seasonal + res.resid
+        )
+
+    # spikiness: variance of the leave-one-out variances of the remainder component
+    if extra_args is not None and extra_args.get("spikiness", default_status):
+        resid_array = np.repeat(
+            np.array(res.resid)[:, np.newaxis], len(res.resid), axis=1
+        )
+        resid_array[np.diag_indices(len(resid_array))] = np.NaN
+        stl_features["spikiness"] = np.var(np.nanvar(resid_array, axis=0))
+
+    # location of peak
+    if extra_args is not None and extra_args.get("peak", default_status):
+        stl_features["peak"] = np.argmax(res.seasonal[:period])
+
+    # location of trough
+    if extra_args is not None and extra_args.get("trough", default_status):
+        stl_features["trough"] = np.argmin(res.seasonal[:period])
+
+    return stl_features
