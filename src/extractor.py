@@ -30,6 +30,7 @@ from numba import jit
 import gc
 
 from collections import defaultdict
+from typing import Optional, Dict, List, Tuple
 
 from time import sleep
 
@@ -42,6 +43,7 @@ import nolds
 ## Ideas for extracts
 # 'complexity': how many fourier components are needed to describe the signal with a certain accuracy
 # 'complexity': spline complexity, how many splines are needed to describe the signal with a certain accuracy
+# 'periodicity': peak_counter
 
 # add Cesium features
 DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
@@ -126,7 +128,7 @@ def get_crossectional(tsdf: pd.DataFrame,
                             time_col=time_col)
         ts_data_agg_nolds = NoldsExtract.transform()
 
-    ts_data_agg = ts_data_agg.set_index('id')
+    FINAL_FEATURES = ts_data_agg.set_index('id')
 
     _cstring = '_custom'
     if tsfresh_features==True:        
@@ -441,15 +443,14 @@ class KatzExtractor:
     # get_linearity
     # get_het_arch
     # get_stl_features
-    # TsFeatures.get_acf_features
-    # TsFeatures.get_flat_spots
-    # TsFeatures.get_pacf_features
-    # TsFeatures.get_acfpacf_features
+    # get_acf_features
+    # get_pacf_features
+    # get_acfpacf_features
+    # TsFeatures.get_flat_spots   
     # TsFeatures.get_unitroot_kpss
     # TsFeatures.get_holt_params
     # TsFeatures.get_cusum_detector
     # TsFeatures.get_trend_detector
-    
     
     
     pass
@@ -712,7 +713,9 @@ def get_het_arch(x: np.ndarray) -> float:
 @jit(forceobj=True)
 def get_stl_features(
     x: np.ndarray,
-    period: int = 7,
+    period: int = 2,
+    window: int = 4,
+    robust: bool = False,
     extra_args: Optional[Dict[str, bool]] = None,
     default_status: bool = True,
 ) -> Dict[str, float]:
@@ -733,40 +736,287 @@ def get_stl_features(
         Seasonality features including strength of trend, seasonality,
         spikiness, peak/trough.
     """
+    
+    assert(window>=period), "The smoothing window should be larger than or equal to the period"
 
     stl_features = {}
 
     # STL decomposition
-    res = STL(x, period=period).fit()
+    res = STL(x, period=period, seasonal=window, robust=robust).fit()
+    
+    stl_features["var_trend"] = np.var(res.trend)
+    stl_features["var_res"] = np.var(res.resid)
 
     # strength of trend
-    if extra_args is not None and extra_args.get("trend_strength", default_status):
-        stl_features["trend_strength"] = 1 - np.var(res.resid) / np.var(
+    stl_features["trend_strength"] = 1 - np.var(res.resid) / np.var(
             res.trend + res.resid
         )
 
-    # strength of seasonality
-    if extra_args is not None and extra_args.get(
-        "seasonality_strength", default_status
-    ):
-        stl_features["seasonality_strength"] = 1 - np.var(res.resid) / np.var(
+    stl_features["seasonality_strength"] = 1 - np.var(res.resid) / np.var(
             res.seasonal + res.resid
         )
 
     # spikiness: variance of the leave-one-out variances of the remainder component
-    if extra_args is not None and extra_args.get("spikiness", default_status):
-        resid_array = np.repeat(
-            np.array(res.resid)[:, np.newaxis], len(res.resid), axis=1
-        )
-        resid_array[np.diag_indices(len(resid_array))] = np.NaN
-        stl_features["spikiness"] = np.var(np.nanvar(resid_array, axis=0))
+    resid_array = np.repeat(
+        np.array(res.resid)[:, np.newaxis], len(res.resid), axis=1
+    )
+    resid_array[np.diag_indices(len(resid_array))] = np.NaN
+    stl_features["spikiness"] = np.var(np.nanvar(resid_array, axis=0))
 
     # location of peak
-    if extra_args is not None and extra_args.get("peak", default_status):
-        stl_features["peak"] = np.argmax(res.seasonal[:period])
+    stl_features["peak"] = np.argmax(res.seasonal[:period])
 
     # location of trough
-    if extra_args is not None and extra_args.get("trough", default_status):
-        stl_features["trough"] = np.argmin(res.seasonal[:period])
+    stl_features["trough"] = np.argmin(res.seasonal[:period])
 
     return stl_features
+
+@jit(forceobj=True)
+def get_acf_features(
+    extra_args: Dict[str, bool],
+    default_status: bool,
+    y_acf_list: List[float],
+    diff1y_acf_list: List[float],
+    diff2y_acf_list: List[float],
+) -> Tuple[float, float, float, float, float, float, float]:
+    """
+    Aggregating extracted ACF features from get_acfpacf_features function.
+
+    Args:
+        extra_args: A dictionary containing information for disabling calculation
+            of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+        y_acf_list: List of ACF values acquired from original time series.
+        diff1y_acf_list: List of ACF values acquired from differenced time series.
+        diff2y_acf_list: List of ACF values acquired from twice differenced
+            time series.
+
+    Returns:
+        Auto-correlation function (ACF) features.
+    """
+
+    y_acf1 = y_acf5 = diff1y_acf1 = diff1y_acf5 = diff2y_acf1 = np.nan
+    diff2y_acf5 = seas_acf1 = np.nan
+
+    # y_acf1: first ACF value of the original series
+    if extra_args.get("y_acf1", default_status):
+        y_acf1 = y_acf_list[0]
+
+    # y_acf5: sum of squares of first 5 ACF values of original series
+    if extra_args.get("y_acf5", default_status):
+        y_acf5 = np.sum(np.asarray(y_acf_list)[:5] ** 2)
+
+    # diff1y_acf1: first ACF value of the differenced series
+    if extra_args.get("diff1y_acf1", default_status):
+        diff1y_acf1 = diff1y_acf_list[0]
+
+    # diff1y_acf5: sum of squares of first 5 ACF values of differenced series
+    if extra_args.get("diff1y_acf5", default_status):
+        diff1y_acf5 = np.sum(np.asarray(diff1y_acf_list)[:5] ** 2)
+
+    # diff2y_acf1: first ACF value of the twice-differenced series
+    if extra_args.get("diff2y_acf1", default_status):
+        diff2y_acf1 = diff2y_acf_list[0]
+
+    # diff2y_acf5: sum of squares of first 5 ACF values of twice-differenced series
+    if extra_args.get("diff2y_acf5", default_status):
+        diff2y_acf5 = np.sum(np.asarray(diff2y_acf_list)[:5] ** 2)
+
+    # Autocorrelation coefficient at the first seasonal lag.
+    if extra_args.get("seas_acf1", default_status):
+        seas_acf1 = y_acf_list[-1]
+
+    return (
+        y_acf1,
+        y_acf5,
+        diff1y_acf1,
+        diff1y_acf5,
+        diff2y_acf1,
+        diff2y_acf5,
+        seas_acf1,
+    )
+        
+def get_pacf_features(
+    extra_args: Dict[str, bool],
+    default_status: bool,
+    y_pacf_list: List[float],
+    diff1y_pacf_list: List[float],
+    diff2y_pacf_list: List[float],
+) -> Tuple[float, float, float, float]:
+    """
+    Aggregating extracted PACF features from get_acfpacf_features function.
+
+    Args:
+        extra_args: A dictionary containing information for disabling calculation
+            of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+        y_pacf_list: List of PACF values acquired from original time series.
+        diff1y_pacf_list: List of PACF values acquired from differenced time series.
+        diff2y_pacf_list: List of PACF values acquired from twice differenced
+            time series.
+
+    Returns:
+        Partial auto-correlation function (PACF) features.
+    """
+
+    y_pacf5 = diff1y_pacf5 = diff2y_pacf5 = seas_pacf1 = np.nan
+
+    # y_pacf5: sum of squares of first 5 PACF values of original series
+    if extra_args.get("y_pacf5", default_status):
+        y_pacf5 = np.nansum(np.asarray(y_pacf_list)[:5] ** 2)
+
+    # diff1y_pacf5: sum of squares of first 5 PACF values of differenced series
+    if extra_args.get("diff1y_pacf5", default_status):
+        diff1y_pacf5 = np.nansum(np.asarray(diff1y_pacf_list)[:5] ** 2)
+
+    # diff2y_pacf5: sum of squares of first 5 PACF values of twice-differenced series
+    if extra_args.get("diff2y_pacf5", default_status):
+        diff2y_pacf5 = np.nansum(np.asarray(diff2y_pacf_list)[:5] ** 2)
+
+    # Patial Autocorrelation coefficient at the first seasonal lag.
+    if extra_args.get("seas_pacf1", default_status):
+        seas_pacf1 = y_pacf_list[-1]
+
+    return (
+        y_pacf5,
+        diff1y_pacf5,
+        diff2y_pacf5,
+        seas_pacf1,
+    )
+
+def get_acfpacf_features(
+    x: np.ndarray,
+    acfpacf_lag: int = 6,
+    period: int = 7,
+    extra_args: Optional[Dict[str, bool]] = None,
+    default_status: bool = True,
+) -> Dict[str, float]:
+    """
+    Calculate ACF and PACF based features. Calculate seasonal ACF, PACF based features.
+
+    Reference: https://stackoverflow.com/questions/36038927/whats-the-difference-between-pandas-acf-and-statsmodel-acf
+    R code: https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html
+    Paper: Meta-learning how to forecast time series
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        acfpacf_lag: int; Largest lag number for returning ACF/PACF features
+            via statsmodels.
+        period: int; Seasonal period.
+        extra_args: A dictionary containing information for disabling
+            calculation of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+
+    Returns:
+        Aggregated ACF, PACF features.
+    """
+
+    acfpacf_features = {
+        "y_acf1": np.nan,
+        "y_acf5": np.nan,
+        "diff1y_acf1": np.nan,
+        "diff1y_acf5": np.nan,
+        "diff2y_acf1": np.nan,
+        "diff2y_acf5": np.nan,
+        "y_pacf5": np.nan,
+        "diff1y_pacf5": np.nan,
+        "diff2y_pacf5": np.nan,
+        "seas_acf1": np.nan,
+        "seas_pacf1": np.nan,
+    }
+    if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
+        msg = (
+            "Length is shorter than period, or constant time series, "
+            "unable to calculate acf/pacf features"
+        )
+        logging.error(msg)
+        return acfpacf_features
+
+    nlag = min(acfpacf_lag, len(x) - 2)
+
+    diff1x = [x[i] - x[i - 1] for i in range(1, len(x))]
+    diff2x = [diff1x[i] - diff1x[i - 1] for i in range(1, len(diff1x))]
+
+    y_acf_list = acf(x, fft=True, nlags=period)[1:]
+    diff1y_acf_list = acf(diff1x, fft=True, nlags=nlag)[1:]
+    diff2y_acf_list = acf(diff2x, fft=True, nlags=nlag)[1:]
+
+    y_pacf_list = pacf(x, nlags=period)[1:]
+
+    if (
+        TsFeatures._yule_walker_determinant(diff1x) == 0
+        or TsFeatures._yule_walker_determinant(diff2x) == 0
+    ):
+        logging.warning(
+            "Could not generate acfpacf features because input matrix is singular."
+        )
+        return acfpacf_features
+
+    diff1y_pacf_list = pacf(diff1x, nlags=nlag)[1:]
+    diff2y_pacf_list = pacf(diff2x, nlags=nlag)[1:]
+
+    (
+        acfpacf_features["y_acf1"],
+        acfpacf_features["y_acf5"],
+        acfpacf_features["diff1y_acf1"],
+        acfpacf_features["diff1y_acf5"],
+        acfpacf_features["diff2y_acf1"],
+        acfpacf_features["diff2y_acf5"],
+        acfpacf_features["seas_acf1"],
+    ) = TsFeatures.get_acf_features(
+        extra_args,
+        default_status,
+        y_acf_list,
+        diff1y_acf_list,
+        diff2y_acf_list,
+    )
+
+    # getting PACF features
+    (
+        acfpacf_features["y_pacf5"],
+        acfpacf_features["diff1y_pacf5"],
+        acfpacf_features["diff2y_pacf5"],
+        acfpacf_features["seas_pacf1"],
+    ) = TsFeatures.get_pacf_features(
+        extra_args,
+        default_status,
+        y_pacf_list,
+        diff1y_pacf_list,
+        diff2y_pacf_list,
+    )
+
+    return acfpacf_features
+    
+@jit(forceobj=True)
+def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
+    """
+    Getting flat spots: Maximum run-lengths across equally-sized segments of time series
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        nbins: int; Number of bins to segment time series data into.
+
+    Returns:
+        Maximum run-lengths across segmented time series array.
+    """
+
+    if len(x) <= nbins:
+        msg = (
+            "Length of time series is shorter than nbins, unable to "
+            "calculate flat spots feature"
+        )
+        logging.error(msg)
+        return np.nan
+
+    max_run_length = 0
+    window_size = int(len(x) / nbins)
+    for i in range(0, len(x), window_size):
+        run_length = np.max(
+            [len(list(v)) for k, v in groupby(x[i : i + window_size])]
+        )
+        if run_length > max_run_length:
+            max_run_length = run_length
+    return max_run_length
