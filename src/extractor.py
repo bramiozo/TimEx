@@ -194,7 +194,10 @@ class Extractor:
                         _mann_kendall_test(ts_data)
             wavelet_transform_feature = _wavelet_transform_feature(ts_data)
             psd_int = _psd_int(ts_data, integrator='trapezoidal')
-            
+            avg_2nd_diff = avg_2nd_order(ts_data)
+            avg_1st_diff = avg_1st_order(ts_data)
+            entr_1st_diff = diff_entropy_1st(ts_data)
+            entr_2nd_diff = diff_entropy_2nd(ts_data)
             # Store the features for the current ID
             self.features[_id] = {
                 'mean': mean_,
@@ -218,7 +221,11 @@ class Extractor:
                 'mann_kendall_trend': mk_trend,
                 'wavelet_transform_feature': wavelet_transform_feature,
                 'psd_int': psd_int,
-                'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum
+                'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum,
+                'avg_2nd_diff': avg_2nd_diff,
+                'avg_1st_diff': avg_1st_diff,
+                'entr_1st_diff': entr_1st_diff,
+                'entr_2nd_diff': entr_2nd_diff
             }
         
     def transform(self):
@@ -1020,3 +1027,40 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
         if run_length > max_run_length:
             max_run_length = run_length
     return max_run_length
+
+
+@jit(forceobj=True)
+def avg_2nd_order(x: np.ndarray)-> float:
+    """
+        Requires a minimum of 4 points    
+    """
+    assert(x.shape[0]>3), "We would like a minimum of 4 points for averaging the 2nd diff"
+    xd1 = np.diff(x, n=2)
+    return np.nanmean(xd1)
+
+@jit(forceobj=True)
+def avg_1st_order(x: np.ndarray)-> float:
+    """
+        Requires a minimum of 3 points    
+    """
+    assert(x.shape[0]>2), "We would like a minimum of 3 points for averaging the 1nd diff"
+    xd1 = np.diff(x, n=1)
+    return np.nanmean(xd1)
+
+@jit(forceobj=True)
+def diff_entropy_1st(x:np.ndarray)-> float:
+    assert(x.shape[0]>1), "We would like a minimum of 3 points for averaging the 1nd diff"
+    xd1 = np.diff(x, n=1)
+    return get_relative_entropy(xd1)
+
+@jit(forceobj=True)
+def diff_entropy_2nd(x:np.ndarray)-> float:
+    assert(x.shape[0]>1), "We would like a minimum of 3 points for averaging the 1nd diff"
+    xd2 = np.diff(x, n=2)
+    return get_relative_entropy(xd2)
+
+# similarity with pre-defined shapes
+
+
+# extract shapelets
+# https://tslearn.readthedocs.io/en/stable/user_guide/shapelets.html
