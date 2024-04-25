@@ -18,18 +18,22 @@ import pandas as pd
 import gc
 from collections import defaultdict
 from time import sleep
-from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 from sklego.meta.grouped_transformer import GroupedTransformer
 
+from typing import Optional, List, Dict, Literal
 
 from tslearn import metrics
 
 def normalise_ts(ts_df, id_col='ID', 
                  time_col='Time_days', 
                  val_col='eGFR_CKDEpi2012',
-                 df_out=False):
-    # TODO: implement normalisation of time series data PER ID
-    scaler = TimeSeriesScalerMeanVariance()
+                 df_out=False,
+                 scaler: Literal['standard', 'minmax'] = 'standard'):
+    if scaler=='standard':
+        scaler = TimeSeriesScalerMeanVariance()
+    elif scaler=='minmax':
+        scaler = TimeSeriesScalerMinMax()
     
     #group_scaler = GroupedTransformer(scaler, groups=id_col)
     #ts_df[val_col] = group_scaler.fit_transform(ts_df)    
@@ -59,10 +63,9 @@ def get_filtered_df(ts_df,
     maxts = ts_df.groupby(id_col)[time_col].max()
     ltids = maxts[maxts>min_days].index
     
-    
     cnts = ts_df[(ts_df[id_col].isin(ltids)) &
-                 (ts_df[time_col]<365)].groupby(id_col).size()
-    filtered_ids = cnts[cnts>3].index
+                 (ts_df[time_col]<min_days)].groupby(id_col).size()
+    filtered_ids = cnts[cnts>min_measurements].index
     
     ts = ts_df.loc[ts_df[id_col].isin(filtered_ids)]
     return ts

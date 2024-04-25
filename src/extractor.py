@@ -37,6 +37,7 @@ from time import sleep
 import antropy as ant
 import nolds
 
+from fastdtw import fastdtw
 #TODO: add interpretable feature mappings 
 # e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}} 
     
@@ -198,8 +199,10 @@ class Extractor:
             avg_1st_diff = avg_1st_order(ts_data)
             entr_1st_diff = diff_entropy_1st(ts_data)
             entr_2nd_diff = diff_entropy_2nd(ts_data)
+            shape_comparisons = shape_compare(ts_data)
+                        
             # Store the features for the current ID
-            self.features[_id] = {
+            res_dict = {
                 'mean': mean_,
                 'min': min_,
                 'max': max_,
@@ -225,8 +228,12 @@ class Extractor:
                 'avg_2nd_diff': avg_2nd_diff,
                 'avg_1st_diff': avg_1st_diff,
                 'entr_1st_diff': entr_1st_diff,
-                'entr_2nd_diff': entr_2nd_diff
+                'entr_2nd_diff': entr_2nd_diff,
             }
+            
+            res_dict.update(shape_comparisons)
+                        
+            self.features[_id] = res_dict
         
     def transform(self):
         # Convert the features dictionary to a DataFrame
@@ -1060,7 +1067,31 @@ def diff_entropy_2nd(x:np.ndarray)-> float:
     return get_relative_entropy(xd2)
 
 # similarity with pre-defined shapes
-
+@jit(forceobj=True)
+def shape_compare(x:np.ndarray)-> dict:
+    lenX = x.shape[0]
+    tDummy = np.arange(0, lenX)
+    
+    xLinearUp = tDummy*1/lenX
+    xLinearDown = -tDummy*1/lenX
+    xQup = tDummy**2/lenX**2
+    xQdown = -xQup
+    xSinFU = np.sin(2*3.14*tDummy/lenX)
+    xSinFD = -xSinFU
+    xCos = np.cos(2*3.14*tDummy/lenX)
+    
+    # fast DTW 
+    out_dict = {
+        'sim_linup': fastdtw(x, xLinearUp)[0],
+        'sim_lindown': fastdtw(x, xLinearDown)[0],
+        'sim_qup': fastdtw(x, xQup)[0],
+        'sim_qdown': fastdtw(x, xQdown)[0],
+        'sim_sinfu': fastdtw(x, xSinFU)[0],
+        'sim_sinfd': fastdtw(x, xSinFD)[0],
+        'sim_cos': fastdtw(x, xCos)[0],
+    }
+    
+    return out_dict
 
 # extract shapelets
 # https://tslearn.readthedocs.io/en/stable/user_guide/shapelets.html
