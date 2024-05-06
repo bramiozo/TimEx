@@ -33,10 +33,16 @@ Using
 
 # Cluster
 
+## TS specific
 * [MPF](https://matrixprofile.docs.matrixprofile.org/examples/Hierarchical_Clustering_Accelerometer_Walk_Stand_etc.html)
 * [TiCC](https://github.com/davidhallac/TICC)
 * dtwclust
 * [LCMM](https://cran.r-project.org/web/packages/lcmm/lcmm.pdf)
+
+## Cross-sectional
+* [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
+* Sklearn clustering methods
+* HDBSCAN
 
 
 # Examples
