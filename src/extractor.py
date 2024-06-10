@@ -195,10 +195,12 @@ class Extractor:
                         _mann_kendall_test(ts_data)
             wavelet_transform_feature = _wavelet_transform_feature(ts_data)
             psd_int = _psd_int(ts_data, integrator='trapezoidal')
+            avg_3rd_diff = avg_3rd_order(ts_data)
             avg_2nd_diff = avg_2nd_order(ts_data)
             avg_1st_diff = avg_1st_order(ts_data)
             entr_1st_diff = diff_entropy_1st(ts_data)
             entr_2nd_diff = diff_entropy_2nd(ts_data)
+            entr_3rd_diff = diff_entropy_3rd(ts_data)
             shape_comparisons = shape_compare(ts_data)
                         
             # Store the features for the current ID
@@ -225,10 +227,12 @@ class Extractor:
                 'wavelet_transform_feature': wavelet_transform_feature,
                 'psd_int': psd_int,
                 'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum,
+                'avg_3rd_diff': avg_3rd_diff,
                 'avg_2nd_diff': avg_2nd_diff,
                 'avg_1st_diff': avg_1st_diff,
                 'entr_1st_diff': entr_1st_diff,
                 'entr_2nd_diff': entr_2nd_diff,
+                'entr_3rd_diff': entr_3rd_diff,
             }
             
             res_dict.update(shape_comparisons)
@@ -1035,6 +1039,14 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
             max_run_length = run_length
     return max_run_length
 
+@jit(forceobj=True)
+def avg_3rd_order(x: np.ndarray)-> float:
+    """
+        Requires a minimum of 4 points    
+    """
+    assert(x.shape[0]>4), "We would like a minimum of 5 points for averaging the 2nd diff"
+    xd3 = np.diff(x, n=3)
+    return np.nanmean(xd3)
 
 @jit(forceobj=True)
 def avg_2nd_order(x: np.ndarray)-> float:
@@ -1042,8 +1054,8 @@ def avg_2nd_order(x: np.ndarray)-> float:
         Requires a minimum of 4 points    
     """
     assert(x.shape[0]>3), "We would like a minimum of 4 points for averaging the 2nd diff"
-    xd1 = np.diff(x, n=2)
-    return np.nanmean(xd1)
+    xd2 = np.diff(x, n=2)
+    return np.nanmean(xd2)
 
 @jit(forceobj=True)
 def avg_1st_order(x: np.ndarray)-> float:
@@ -1062,9 +1074,15 @@ def diff_entropy_1st(x:np.ndarray)-> float:
 
 @jit(forceobj=True)
 def diff_entropy_2nd(x:np.ndarray)-> float:
-    assert(x.shape[0]>1), "We would like a minimum of 3 points for averaging the 1nd diff"
+    assert(x.shape[0]>2), "We would like a minimum of 3 points for averaging the 1nd diff"
     xd2 = np.diff(x, n=2)
     return get_relative_entropy(xd2)
+
+@jit(forceobj=True)
+def diff_entropy_3rd(x:np.ndarray)-> float:
+    assert(x.shape[0]>3), "We would like a minimum of 3 points for averaging the 1nd diff"
+    xd3 = np.diff(x, n=3)
+    return get_relative_entropy(xd3)
 
 # similarity with pre-defined shapes
 @jit(forceobj=True)
@@ -1080,6 +1098,30 @@ def shape_compare(x:np.ndarray)-> dict:
     xSinFD = -xSinFU
     xCos = np.cos(2*3.14*tDummy/lenX)
     
+    # first-up-then-down
+    ts_fUtD = np.hstack([tDummy[:lenX//2], lenX-tDummy[lenX//2:]], dtype='float64')
+    ts_fUtD /= np.max(ts_fUtD)
+    
+    # first-down-then-up
+    ts_fDtU = np.hstack([-tDummy[:lenX//2], -lenX+tDummy[lenX//2:]], dtype='float64')
+    ts_fDtU /= np.max(np.abs(ts_fUtD))
+        
+    # first-up-then-straight
+    ts_fUtS = np.hstack([tDummy[:lenX//2], lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
+    ts_fUtS /= np.max(np.abs(ts_fUtS))
+    
+    # first-down-then-straight
+    ts_fDtS = np.hstack([-tDummy[:lenX//2], -lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
+    ts_fDtS /= np.max(np.abs(ts_fDtS))
+    
+    # first-straight-then-down
+    ts_fStD = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), lenX-tDummy[lenX//2:]], dtype='float64')
+    ts_fStD /= np.median(np.abs(ts_fStD))
+    
+    # first-straight-then-up
+    ts_fStU = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), tDummy[lenX//2:]], dtype='float64')
+    ts_fStU /= np.median(np.abs(ts_fStU))    
+    
     # fast DTW 
     out_dict = {
         'sim_linup': fastdtw(x, xLinearUp)[0],
@@ -1089,6 +1131,12 @@ def shape_compare(x:np.ndarray)-> dict:
         'sim_sinfu': fastdtw(x, xSinFU)[0],
         'sim_sinfd': fastdtw(x, xSinFD)[0],
         'sim_cos': fastdtw(x, xCos)[0],
+        'sim_fUtD': fastdtw(x, ts_fUtD)[0],
+        'sim_fDtU': fastdtw(x, ts_fDtU)[0], 
+        'sim_fUtS': fastdtw(x, ts_fUtS)[0], 
+        'sim_fDtS': fastdtw(x, ts_fDtS)[0],
+        'sim_fStD': fastdtw(x, ts_fStD)[0],
+        'sim_fStU': fastdtw(x, ts_fStU)[0],                   
     }
     
     return out_dict

@@ -95,15 +95,23 @@ def get_interpolated(ts_df, id_col='ID', time_col='Time_days',
     else:
         return res
 
-def get_smoothed_rolling_mean(ts_dict: dict, id_col='ID', time_col='Time_days',
-                        val_col='eGFR_CKDEpi2012', window=5, df_out=False):
+# TODO: ensure that first N-points are excluded from smoothing
+def get_smoothed_rolling_mean(ts_dict: dict, 
+                              id_col='ID', 
+                              time_col='Time_days',
+                              val_col='eGFR_CKDEpi2012', 
+                              window=5,
+                              Nskip=3,
+                              df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     
     ts_df = pd.DataFrame.from_dict(ts_dict)
     for _id in tqdm(ts_df[id_col].unique()):
         _df = ts_df.loc[ts_df[id_col]==_id][[id_col, time_col, val_col]]
         _df = _df.sort_values(by=time_col)
-        _df[val_col] = _df[val_col].rolling(window=window).mean()
+        smoothed_values = _df[val_col].rolling(window=window).mean()
+        _df[val_col][Nskip:-Nskip] = smoothed_values[Nskip:-Nskip]
+        
         
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
@@ -113,15 +121,22 @@ def get_smoothed_rolling_mean(ts_dict: dict, id_col='ID', time_col='Time_days',
     else:
         return res
 
-def get_smoothed_gaussian_kernel(ts_dict: dict, id_col='ID', time_col='Time_days',
-                        val_col='eGFR_CKDEpi2012', window=5, df_out=False):
+# TODO: ensure that first N-points are excluded from smoothing
+def get_smoothed_gaussian_kernel(ts_dict: dict, 
+                                 id_col='ID', 
+                                 time_col='Time_days',
+                                 val_col='eGFR_CKDEpi2012', 
+                                 window=5,
+                                 Nskip=3,
+                                 df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     
     ts_df = pd.DataFrame.from_dict(ts_dict)
     for _id in tqdm(ts_df[id_col].unique()):
         _df = ts_df.loc[ts_df[id_col]==_id][[id_col, time_col, val_col]]
         _df = _df.sort_values(by=time_col)
-        _df[val_col] = ndimage.gaussian_filter1d(_df[val_col], window)
+        smoothed_values = ndimage.gaussian_filter1d(_df[val_col], window)
+        _df[val_col][Nskip:-Nskip] = smoothed_values[Nskip:-Nskip]
         
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
