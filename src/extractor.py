@@ -43,8 +43,12 @@ from fastdtw import fastdtw
     
 ## Ideas for extracts
 # 'complexity': how many fourier components are needed to describe the signal with a certain accuracy
-# 'complexity': spline complexity, how many splines are needed to describe the signal with a certain accuracy
+# 'complexity': (1) spline complexity, how many splines are needed to describe the signal with a certain accuracy, (2) spline-series of knots etc.
 # 'periodicity': peak_counter
+
+# TODO: extract shapelets
+# https://tslearn.readthedocs.io/en/stable/user_guide/shapelets.html
+
 
 # add Cesium features
 DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
@@ -1141,5 +1145,5 @@ def shape_compare(x:np.ndarray)-> dict:
     
     return out_dict
 
-# extract shapelets
-# https://tslearn.readthedocs.io/en/stable/user_guide/shapelets.html
+
+
