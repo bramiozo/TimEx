@@ -1,6 +1,15 @@
 # TimEx
 Repository for extracting time-series features and clusters
 
+# **Normalisation**
+
+
+# **Interpolation**
+
+
+# **Smoothing** 
+
+
 # **Crossectional feature extraction** (CFE)
 Using features  from
 * catch22
@@ -17,11 +26,7 @@ Using features  from
   * FFT
   * Mann-Kendall
  
- 
-TODO:  use tsflex to improve performance of feature  extraction.
-
-# **Cross-section distance matrices** (CsDM):
-Using
+ TODO:  use tsflex to improve performance of feature  extraction.
 
 # **Timeseries distance matrices** (TDM):
 Using 
@@ -30,8 +35,16 @@ Using
 * Custom:
   * log rank
   * distance correlation
+  * wavelet embeddings
+
+# Direct sparse coding of timeseries (DSC)
+
+```timeseries -> low-ranking representation```
+
+
 
 # Cluster
+```CFE/TDM/DSC -> clustering```
 
 ## TS specific
 * [MPF](https://matrixprofile.docs.matrixprofile.org/examples/Hierarchical_Clustering_Accelerometer_Walk_Stand_etc.html)
@@ -43,6 +56,9 @@ Using
 * [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
 * Sklearn clustering methods
 * HDBSCAN
+
+
+
 
 
 # Examples

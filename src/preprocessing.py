@@ -71,10 +71,13 @@ def get_filtered_df(ts_df,
     return ts
 
 def get_interpolated(ts_df, id_col='ID', time_col='Time_days',
-                     val_col='eGFR_CKDEpi2012', 
-                     max_days=365, time_res=7, df_out=False):
+                     val_col='eGFR_CKDEpi2012',
+                     days_before=0,
+                     max_days=365,
+                     time_res=7,
+                     df_out=False):
     # use monotonic cubic splines
-    trange = np.arange(0, max_days, time_res)
+    trange = np.arange(-days_before, max_days, time_res)
     
     res = {id_col: [], time_col: [], val_col: []}
     for _id in tqdm(ts_df[id_col].unique()):
@@ -101,6 +104,7 @@ def get_smoothed_rolling_mean(ts_dict: dict,
                               time_col='Time_days',
                               val_col='eGFR_CKDEpi2012', 
                               window=5,
+                              Nskip=3,
                               df_out=False):
     res = {id_col: [], time_col: [], val_col: []}
     
@@ -108,8 +112,12 @@ def get_smoothed_rolling_mean(ts_dict: dict,
     for _id in tqdm(ts_df[id_col].unique()):
         _df = ts_df.loc[ts_df[id_col]==_id][[id_col, time_col, val_col]]
         _df = _df.sort_values(by=time_col)
-        _df[val_col] = _df[val_col].rolling(window=window,
-                                            min_periods=1).mean()
+        if Nskip > 0:
+            r = range(Nskip, _df.shape[0]-Nskip)
+        else:
+            r = range(_df.shape[0])
+        _df.iloc[r, 2] = _df[val_col].rolling(window=window,
+                                            min_periods=1).mean().values[r]
         
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
@@ -138,7 +146,13 @@ def get_smoothed_gaussian_kernel(ts_dict: dict,
         _df = ts_df.loc[ts_df[id_col]==_id][[id_col, time_col, val_col]]
         _df = _df.sort_values(by=time_col)
         smoothed_values = ndimage.gaussian_filter1d(_df[val_col], window)
-        _df.iloc[Nskip:-Nskip, 2] = smoothed_values[Nskip:-Nskip]
+
+        if Nskip > 0:
+            r = range(Nskip, len(_df)-Nskip)
+        else:
+            r = range(len(_df))
+
+        _df.iloc[r, 2] = smoothed_values[r]
         
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)

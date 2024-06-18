@@ -206,7 +206,13 @@ class Extractor:
             entr_2nd_diff = diff_entropy_2nd(ts_data)
             entr_3rd_diff = diff_entropy_3rd(ts_data)
             shape_comparisons = shape_compare(ts_data)
-                        
+
+            _peak_over_mean = peak_over_mean(ts_data)
+            _peak_over_median = peak_over_median(ts_data)
+            _first_gradient = first_gradient(ts_data)
+            _second_gradient = second_gradient(ts_data)
+            _last_gradient = last_gradient(ts_data)
+
             # Store the features for the current ID
             res_dict = {
                 'mean': mean_,
@@ -237,6 +243,11 @@ class Extractor:
                 'entr_1st_diff': entr_1st_diff,
                 'entr_2nd_diff': entr_2nd_diff,
                 'entr_3rd_diff': entr_3rd_diff,
+                'peak_over_mean': _peak_over_mean,
+                'peak_over_median': _peak_over_median,
+                'first_gradient': _first_gradient,
+                'second_gradient': _second_gradient,
+                'last_gradient': _last_gradient
             }
             
             res_dict.update(shape_comparisons)
@@ -1071,22 +1082,45 @@ def avg_1st_order(x: np.ndarray)-> float:
     return np.nanmean(xd1)
 
 @jit(forceobj=True)
-def diff_entropy_1st(x:np.ndarray)-> float:
+def diff_entropy_1st(x:np.ndarray) -> float:
     assert(x.shape[0]>1), "We would like a minimum of 3 points for averaging the 1nd diff"
     xd1 = np.diff(x, n=1)
     return get_relative_entropy(xd1)
 
 @jit(forceobj=True)
-def diff_entropy_2nd(x:np.ndarray)-> float:
+def diff_entropy_2nd(x:np.ndarray) -> float:
     assert(x.shape[0]>2), "We would like a minimum of 3 points for averaging the 1nd diff"
     xd2 = np.diff(x, n=2)
     return get_relative_entropy(xd2)
 
 @jit(forceobj=True)
-def diff_entropy_3rd(x:np.ndarray)-> float:
+def diff_entropy_3rd(x:np.ndarray) -> float:
     assert(x.shape[0]>3), "We would like a minimum of 3 points for averaging the 1nd diff"
     xd3 = np.diff(x, n=3)
     return get_relative_entropy(xd3)
+
+@jit(forceobj=True)
+def peak_over_mean(x: np.ndarray) -> float:
+    max_v = x.max()
+    mean_v = x.mean()
+    return max_v/mean_v
+
+@jit(forceobj=True)
+def peak_over_median(x: np.ndarray) -> float:
+    max_v = x.max()
+    median_v = np.median(x)
+    return max_v/median_v
+
+@jit(forceobj=True)
+def first_gradient(x: np.ndarray) -> float:
+    return np.gradient(x)[0]
+
+@jit(forceobj=True)
+def second_gradient(x: np.ndarray) -> float:
+    return np.gradient(x)[1]
+@jit(forceobj=True)
+def last_gradient(x: np.ndarray) -> float:
+    return np.gradient(x)[-1]
 
 # similarity with pre-defined shapes
 @jit(forceobj=True)
