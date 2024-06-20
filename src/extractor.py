@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import logging
 
 from scipy.stats import skew, kurtosis, entropy as _entropy, linregress
 from scipy.fft import rfft, rfftfreq
@@ -18,6 +19,8 @@ from tsfresh.feature_extraction import ComprehensiveFCParameters
 
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import acf, kpss, pacf
+from statsmodels.stats.diagnostic import het_arch
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 import antropy as ant
 from cesium import featurize
@@ -30,6 +33,7 @@ from numba import jit
 import gc
 
 from collections import defaultdict
+from itertools import groupby
 from typing import Optional, Dict, List, Tuple
 
 from time import sleep
@@ -82,7 +86,8 @@ def get_crossectional(tsdf: pd.DataFrame,
                       catch22_features=False, 
                       cesium_features=False,
                       antropy_features=False,
-                      nolds_features=False):
+                      nolds_features=False,
+                      katz_features=False):
 
     CustomExtractor = Extractor()
     CustomExtractor.fit(tsdf, 
@@ -133,6 +138,14 @@ def get_crossectional(tsdf: pd.DataFrame,
                             time_col=time_col)
         ts_data_agg_nolds = NoldsExtract.transform()
 
+    if katz_features==True:
+        KatzExtract = KatzExtractor()
+        KatzExtract.fit(tsdf,
+                            id_col=id_col,
+                            val_col=val_col,
+                            time_col=time_col)
+        ts_data_agg_katz = KatzExtract.transform()
+
     FINAL_FEATURES = ts_data_agg.set_index('id')
 
     _cstring = '_custom'
@@ -165,7 +178,13 @@ def get_crossectional(tsdf: pd.DataFrame,
                                               left_index=True,
                                               right_index=True,
                                               suffixes=(_cstring, '_nolds'))
-           
+    if katz_features==True:
+        FINAL_FEATURES = FINAL_FEATURES.merge(ts_data_agg_katz,
+                                              left_index=True,
+                                              right_index=True,
+                                              suffixes=(_cstring, '_katz'))
+
+
     return FINAL_FEATURES
 
 class Extractor:
@@ -470,23 +489,57 @@ class NoldsExtractor:
 class KatzExtractor:
     # https://github.com/facebookresearch/Kats/blob/main/tutorials/kats_203_tsfeatures.ipynb
     # https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
-    
 
-    
-    # get_linearity
-    # get_het_arch
-    # get_stl_features
-    # get_acf_features
-    # get_pacf_features
-    # get_acfpacf_features
-    # TsFeatures.get_flat_spots   
-    # TsFeatures.get_unitroot_kpss
+    # groupby in functiontools ?
+
     # TsFeatures.get_holt_params
     # TsFeatures.get_cusum_detector
     # TsFeatures.get_trend_detector
-    
-    
-    pass
+
+    def __init__(self,
+                 features_to_use: list = None):
+        self.features_to_use = features_to_use if features_to_use \
+            else ANTROPY_FEATURES
+
+    @staticmethod
+    def katzfeatures(ts_data, features_to_use: list = None):
+        res = {}
+        for f in features_to_use:
+            if f == 'linearity':
+                res[f] = get_linearity(ts_data)
+            elif f == 'het_arch':
+                res[f] = get_het_arch(ts_data)
+            elif f == 'stl_features':
+                res.update(get_stl_features(ts_data))
+            elif f == 'acf_features':
+                res.update(get_acf_features(ts_data))
+            elif f == 'pacf_features':
+                res.update(get_pacf_features(ts_data))
+            elif f == 'flat_spots':
+                res[f] = get_flat_spots(ts_data)
+            elif f == 'unitroot_kpss':
+                res[f] = get_unitroot_kpss(ts_data)
+            elif f == 'holt_params':
+                res.update(get_holt_params(ts_data))
+        return res
+
+    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+        assert (self.features_to_use is not None), "Please provide a list of features to use"
+        df = df.sort_values(by=[id_col, time_col])
+        _features = {}
+        for _id in tqdm(df[id_col].unique()):
+            ts_data = df[df[id_col] == _id][val_col].values
+            feats = self.katzfeatures(ts_data, features_to_use=self.features_to_use)
+            _features[_id] = feats
+        self.features = _features
+
+    def transform(self):
+        # Convert the features dictionary to a DataFrame
+        features_df = pd.DataFrame.from_dict(self.features,
+                                             orient='index').reset_index()
+        features_df = features_df.rename(columns={'index': 'id'})
+        features_df = features_df.set_index('id')
+        return features_df
 
 class TSFelExtractor:
     pass
@@ -811,7 +864,7 @@ def get_acf_features(
     y_acf_list: List[float],
     diff1y_acf_list: List[float],
     diff2y_acf_list: List[float],
-) -> Tuple[float, float, float, float, float, float, float]:
+) -> Dict[str:float]:
     """
     Aggregating extracted ACF features from get_acfpacf_features function.
 
@@ -860,15 +913,15 @@ def get_acf_features(
     if extra_args.get("seas_acf1", default_status):
         seas_acf1 = y_acf_list[-1]
 
-    return (
-        y_acf1,
-        y_acf5,
-        diff1y_acf1,
-        diff1y_acf5,
-        diff2y_acf1,
-        diff2y_acf5,
-        seas_acf1,
-    )
+    return {
+        'acf1': y_acf1,
+        'acf5': y_acf5,
+        'diff1y_acf1': diff1y_acf1,
+        'diff1y_acf5': diff1y_acf5,
+        'diff2y_acf1': diff2y_acf1,
+        'diff2y_acf5': diff2y_acf5,
+        'seas_acf1': seas_acf1,
+    }
         
 def get_pacf_features(
     extra_args: Dict[str, bool],
@@ -876,7 +929,7 @@ def get_pacf_features(
     y_pacf_list: List[float],
     diff1y_pacf_list: List[float],
     diff2y_pacf_list: List[float],
-) -> Tuple[float, float, float, float]:
+) -> Dict[str:float]:
     """
     Aggregating extracted PACF features from get_acfpacf_features function.
 
@@ -912,116 +965,13 @@ def get_pacf_features(
     if extra_args.get("seas_pacf1", default_status):
         seas_pacf1 = y_pacf_list[-1]
 
-    return (
-        y_pacf5,
-        diff1y_pacf5,
-        diff2y_pacf5,
-        seas_pacf1,
-    )
-
-def get_acfpacf_features(
-    x: np.ndarray,
-    acfpacf_lag: int = 6,
-    period: int = 7,
-    extra_args: Optional[Dict[str, bool]] = None,
-    default_status: bool = True,
-) -> Dict[str, float]:
-    """
-    Calculate ACF and PACF based features. Calculate seasonal ACF, PACF based features.
-
-    Reference: https://stackoverflow.com/questions/36038927/whats-the-difference-between-pandas-acf-and-statsmodel-acf
-    R code: https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html
-    Paper: Meta-learning how to forecast time series
-
-    Args:
-        x: The univariate time series array in the form of 1d numpy array.
-        acfpacf_lag: int; Largest lag number for returning ACF/PACF features
-            via statsmodels.
-        period: int; Seasonal period.
-        extra_args: A dictionary containing information for disabling
-            calculation of a certain feature. If None, no feature is disabled.
-        default_status: Default status of the switch for calculate the
-            features or not.
-
-    Returns:
-        Aggregated ACF, PACF features.
-    """
-
-    acfpacf_features = {
-        "y_acf1": np.nan,
-        "y_acf5": np.nan,
-        "diff1y_acf1": np.nan,
-        "diff1y_acf5": np.nan,
-        "diff2y_acf1": np.nan,
-        "diff2y_acf5": np.nan,
-        "y_pacf5": np.nan,
-        "diff1y_pacf5": np.nan,
-        "diff2y_pacf5": np.nan,
-        "seas_acf1": np.nan,
-        "seas_pacf1": np.nan,
+    return {
+        'pacf5': y_pacf5,
+        'diff1y_pacf5': diff1y_pacf5,
+        'diff2y_pacf5': diff2y_pacf5,
+        'seas_pacf1': seas_pacf1,
     }
-    if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
-        msg = (
-            "Length is shorter than period, or constant time series, "
-            "unable to calculate acf/pacf features"
-        )
-        logging.error(msg)
-        return acfpacf_features
 
-    nlag = min(acfpacf_lag, len(x) - 2)
-
-    diff1x = [x[i] - x[i - 1] for i in range(1, len(x))]
-    diff2x = [diff1x[i] - diff1x[i - 1] for i in range(1, len(diff1x))]
-
-    y_acf_list = acf(x, fft=True, nlags=period)[1:]
-    diff1y_acf_list = acf(diff1x, fft=True, nlags=nlag)[1:]
-    diff2y_acf_list = acf(diff2x, fft=True, nlags=nlag)[1:]
-
-    y_pacf_list = pacf(x, nlags=period)[1:]
-
-    if (
-        TsFeatures._yule_walker_determinant(diff1x) == 0
-        or TsFeatures._yule_walker_determinant(diff2x) == 0
-    ):
-        logging.warning(
-            "Could not generate acfpacf features because input matrix is singular."
-        )
-        return acfpacf_features
-
-    diff1y_pacf_list = pacf(diff1x, nlags=nlag)[1:]
-    diff2y_pacf_list = pacf(diff2x, nlags=nlag)[1:]
-
-    (
-        acfpacf_features["y_acf1"],
-        acfpacf_features["y_acf5"],
-        acfpacf_features["diff1y_acf1"],
-        acfpacf_features["diff1y_acf5"],
-        acfpacf_features["diff2y_acf1"],
-        acfpacf_features["diff2y_acf5"],
-        acfpacf_features["seas_acf1"],
-    ) = TsFeatures.get_acf_features(
-        extra_args,
-        default_status,
-        y_acf_list,
-        diff1y_acf_list,
-        diff2y_acf_list,
-    )
-
-    # getting PACF features
-    (
-        acfpacf_features["y_pacf5"],
-        acfpacf_features["diff1y_pacf5"],
-        acfpacf_features["diff2y_pacf5"],
-        acfpacf_features["seas_pacf1"],
-    ) = TsFeatures.get_pacf_features(
-        extra_args,
-        default_status,
-        y_pacf_list,
-        diff1y_pacf_list,
-        diff2y_pacf_list,
-    )
-
-    return acfpacf_features
     
 @jit(forceobj=True)
 def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
@@ -1122,60 +1072,173 @@ def second_gradient(x: np.ndarray) -> float:
 def last_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[-1]
 
-# similarity with pre-defined shapes
 @jit(forceobj=True)
+def get_unitroot_kpss(x: np.ndarray) -> float:
+    """
+    Get the test statistic based on KPSS test.
+
+    Test a null hypothesis that an observable time series is stationary
+    around a deterministic trend. A vector comprising the statistic for the
+    KPSS unit root test with linear trend and lag one
+    Wiki: https://en.wikipedia.org/wiki/KPSS_test
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+
+    Returns:
+        Test statistics acquired using KPSS test.
+    """
+    return kpss(x, regression="ct", nlags=1)[0]
+
+def get_holt_params(
+    x: np.ndarray,
+    extra_args: Optional[Dict[str, bool]] = None,
+    default_status: bool = True,
+) -> Dict[str, float]:
+    """
+    Estimates the smoothing parameters for Holt's linear trend model.
+
+    * 'alpha': Level parameter of the Holt model.
+    * 'beta': Trend parameter of the Hold model.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        extra_args: A dictionary containing information for disabling
+            calculation of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+
+    Returns:
+        Level and trend parameter of a fitted Holt model.
+    """
+
+    holt_params_features = {"holt_alpha": np.nan, "holt_beta": np.nan}
+    try:
+        m = ExponentialSmoothing(x, trend="add", seasonal=None).fit()
+        if extra_args is not None and extra_args.get("holt_alpha", default_status):
+            holt_params_features["holt_alpha"] = m.params["smoothing_level"]
+        if extra_args is not None and extra_args.get("holt_beta", default_status):
+            holt_params_features["holt_beta"] = m.params["smoothing_trend"]
+    except Exception as e:
+        logging.warning(f"Holt Linear failed {e}")
+    return holt_params_features
+
+def get_hw_params(
+    x: np.ndarray,
+    period: int = 7,
+    extra_args: Optional[Dict[str, bool]] = None,
+    default_status: bool = True,
+) -> Dict[str, float]:
+    """
+    Estimates the smoothing parameters for HW linear trend.
+
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        period: int; Seaonal period for fitting exponential smoothing model.
+        extra_args: A dictionary containing information for disabling calculation
+            of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
+
+    Returns:
+        Level, trend and seasonal parameter of a fitted Holt-Winter's model.
+    """
+
+    hw_params_features = {"hw_alpha": np.nan, "hw_beta": np.nan, "hw_gamma": np.nan}
+    try:
+        m = ExponentialSmoothing(
+            x,
+            initialization_method="estimated",
+            seasonal="add",
+            seasonal_periods=period,
+            trend="add",
+            use_boxcox=True,
+        ).fit()
+        if extra_args is not None:
+            if extra_args.get("hw_alpha", default_status):
+                hw_params_features["hw_alpha"] = m.params["smoothing_level"]
+            if extra_args.get("hw_beta", default_status):
+                hw_params_features["hw_beta"] = m.params["smoothing_trend"]
+            if extra_args.get("hw_gamma", default_status):
+                hw_params_features["hw_gamma"] = m.params["smoothing_seasonal"]
+    except Exception as e:
+        logging.warning(f"Holt-Winters failed {e}")
+    return hw_params_features
+
+
+# similarity with pre-defined shapes
+#@jit(forceobj=True)
 def shape_compare(x:np.ndarray)-> dict:
     lenX = x.shape[0]
     tDummy = np.arange(0, lenX)
+
+    try:
+        xLinearUp = tDummy*1/lenX
+        xLinearDown = -tDummy*1/lenX
+        xQup = tDummy**2/lenX**2
+        xQdown = -xQup
+        xSinFU = np.sin(2*3.14*tDummy/lenX)
+        xSinFD = -xSinFU
+        xCos = np.cos(2*3.14*tDummy/lenX)
     
-    xLinearUp = tDummy*1/lenX
-    xLinearDown = -tDummy*1/lenX
-    xQup = tDummy**2/lenX**2
-    xQdown = -xQup
-    xSinFU = np.sin(2*3.14*tDummy/lenX)
-    xSinFD = -xSinFU
-    xCos = np.cos(2*3.14*tDummy/lenX)
-    
-    # first-up-then-down
-    ts_fUtD = np.hstack([tDummy[:lenX//2], lenX-tDummy[lenX//2:]], dtype='float64')
-    ts_fUtD /= np.max(ts_fUtD)
-    
-    # first-down-then-up
-    ts_fDtU = np.hstack([-tDummy[:lenX//2], -lenX+tDummy[lenX//2:]], dtype='float64')
-    ts_fDtU /= np.max(np.abs(ts_fUtD))
-        
-    # first-up-then-straight
-    ts_fUtS = np.hstack([tDummy[:lenX//2], lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
-    ts_fUtS /= np.max(np.abs(ts_fUtS))
-    
-    # first-down-then-straight
-    ts_fDtS = np.hstack([-tDummy[:lenX//2], -lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
-    ts_fDtS /= np.max(np.abs(ts_fDtS))
-    
-    # first-straight-then-down
-    ts_fStD = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), lenX-tDummy[lenX//2:]], dtype='float64')
-    ts_fStD /= np.median(np.abs(ts_fStD))
-    
-    # first-straight-then-up
-    ts_fStU = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), tDummy[lenX//2:]], dtype='float64')
-    ts_fStU /= np.median(np.abs(ts_fStU))    
-    
-    # fast DTW 
-    out_dict = {
-        'sim_linup': fastdtw(x, xLinearUp)[0],
-        'sim_lindown': fastdtw(x, xLinearDown)[0],
-        'sim_qup': fastdtw(x, xQup)[0],
-        'sim_qdown': fastdtw(x, xQdown)[0],
-        'sim_sinfu': fastdtw(x, xSinFU)[0],
-        'sim_sinfd': fastdtw(x, xSinFD)[0],
-        'sim_cos': fastdtw(x, xCos)[0],
-        'sim_fUtD': fastdtw(x, ts_fUtD)[0],
-        'sim_fDtU': fastdtw(x, ts_fDtU)[0], 
-        'sim_fUtS': fastdtw(x, ts_fUtS)[0], 
-        'sim_fDtS': fastdtw(x, ts_fDtS)[0],
-        'sim_fStD': fastdtw(x, ts_fStD)[0],
-        'sim_fStU': fastdtw(x, ts_fStU)[0],                   
-    }
+        # first-up-then-down
+        ts_fUtD = np.hstack([tDummy[:lenX//2], lenX-tDummy[lenX//2:]], dtype='float64')
+
+        # first-down-then-up
+        ts_fDtU = np.hstack([-tDummy[:lenX//2], -lenX+tDummy[lenX//2:]], dtype='float64')
+
+        # first-up-then-straight
+        ts_fUtS = np.hstack([tDummy[:lenX//2], lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
+
+        # first-down-then-straight
+        ts_fDtS = np.hstack([-tDummy[:lenX//2], -lenX//2*np.ones((lenX//2 + lenX%2))], dtype='float64')
+
+        # first-straight-then-down
+        ts_fStD = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), lenX-tDummy[lenX//2:]], dtype='float64')
+
+        # first-straight-then-up
+        ts_fStU = np.hstack([lenX//2*np.ones((lenX//2 + lenX%2)), tDummy[lenX//2:]], dtype='float64')
+
+        out_dict = {
+            'sim_linup': fastdtw(x, xLinearUp)[0],
+            'sim_lindown': fastdtw(x, xLinearDown)[0],
+            'sim_qup': fastdtw(x, xQup)[0],
+            'sim_qdown': fastdtw(x, xQdown)[0],
+            'sim_sinfu': fastdtw(x, xSinFU)[0],
+            'sim_sinfd': fastdtw(x, xSinFD)[0],
+            'sim_cos': fastdtw(x, xCos)[0],
+            'sim_fUtD': fastdtw(x, ts_fUtD[:lenX])[0],
+            'sim_fDtU': fastdtw(x, ts_fDtU[:lenX])[0],
+            'sim_fUtS': fastdtw(x, ts_fUtS[:lenX])[0],
+            'sim_fDtS': fastdtw(x, ts_fDtS[:lenX])[0],
+            'sim_fStD': fastdtw(x, ts_fStD[:lenX])[0],
+            'sim_fStU': fastdtw(x, ts_fStU[:lenX])[0],
+        }
+    except Exception as e:
+        print(f"Shape Sim error: {e}")
+        print(f"Shapes: "
+              f"{ts_fUtD.mean()}, "
+              f"{ts_fDtU.mean()}, "
+              f"{ts_fUtS.mean()}, "
+              f"{ts_fDtS.mean()},"
+              f"{ts_fStD.mean()},"
+              f"{ts_fStU.mean()}")
+        print(f"X shape: {x.shape}")
+        return {
+        'sim_linup': np.nan,
+        'sim_lindown': np.nan,
+        'sim_qup': np.nan,
+        'sim_qdown': np.nan,
+        'sim_sinfu': np.nan,
+        'sim_sinfd': np.nan,
+        'sim_cos': np.nan,
+        'sim_fUtD': np.nan,
+        'sim_fDtU': np.nan,
+        'sim_fUtS': np.nan,
+        'sim_fDtS': np.nan,
+        'sim_fStD': np.nan,
+        'sim_fStU': np.nan,
+        }
     
     return out_dict
 
