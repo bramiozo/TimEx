@@ -4,7 +4,7 @@ import pywt
 from typing import List, Union, Literal, Generator, Tuple
 
 from scipy.fft import fft, fftfreq
-from scipy.signal import ShortTimeFFT, stft
+from scipy.signal import ShortTimeFFT, stft, ricker, cwt
 from scipy.signal.windows import gaussian
 from scipy.signal import spectrogram, get_window
 
@@ -142,5 +142,167 @@ class SingleChannelFT:
 def SpectroGramEmbedder():
     def __init__(self, method: Literal['ravel', 'image_embedder']):
         pass
-     
-    
+
+def wavelet(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT (continuous wavelet transform) of the signal.
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    nd-array
+        The result of the CWT along the time axis
+        matrix with size (len(widths),len(signal))
+    """
+
+    if isinstance(function, str):
+        function = eval(function)
+
+    if isinstance(widths, str):
+        widths = eval(widths)
+
+    cwt = cwt(signal, function, widths)
+
+    return cwt
+def wavelet_entropy(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT entropy of the signal.
+
+    Implementation details in:
+    https://dsp.stackexchange.com/questions/13055/how-to-calculate-cwt-shannon-entropy
+    B.F. Yan, A. Miyamoto, E. Bruhwiler, Wavelet transform-based modal parameter identification considering uncertainty
+
+    Feature computational cost: 2
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    float
+        wavelet entropy
+    """
+    if np.sum(signal) == 0:
+        return 0.0
+
+    cwt = wavelet(signal, function, widths)
+    energy_scale = np.sum(np.abs(cwt), axis=1)
+    t_energy = np.sum(energy_scale)
+    prob = energy_scale / t_energy
+    w_entropy = -np.sum(prob * np.log(prob))
+
+    return w_entropy
+
+
+def wavelet_abs_mean(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT absolute mean value of each wavelet scale.
+
+    Feature computational cost: 2
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    tuple
+        CWT absolute mean value
+    """
+    res = tuple(np.abs(np.mean(wavelet(signal, function, widths), axis=1)))
+    return {'WVL_amean_{k}': v for k, v in enumerate(res)}
+
+
+def wavelet_std(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT std value of each wavelet scale.
+
+    Feature computational cost: 2
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    tuple
+        CWT std
+    """
+    res = tuple(np.std(wavelet(signal, function, widths), axis=1))
+    return {'WVL_std_{k}': v for k, v in enumerate(res)}
+
+
+def wavelet_var(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT variance value of each wavelet scale.
+
+    Feature computational cost: 2
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    tuple
+        CWT variance
+    """
+    res = tuple(np.var(wavelet(signal, function, widths), axis=1))
+    return {'WVL_var_{k}': v for k, v in enumerate(res)}
+
+def wavelet_energy(signal, function=ricker, widths=np.arange(1, 10)):
+    """Computes CWT energy of each wavelet scale.
+
+    Implementation details:
+    https://stackoverflow.com/questions/37659422/energy-for-1-d-wavelet-in-python
+
+    Feature computational cost: 2
+
+    Parameters
+    ----------
+    signal : nd-array
+        Input from which CWT is computed
+    function :  wavelet function
+        Default: scipy.signal.ricker
+    widths :  nd-array
+        Widths to use for transformation
+        Default: np.arange(1,10)
+
+    Returns
+    -------
+    tuple
+        CWT energy
+    """
+    cwt = wavelet(signal, function, widths)
+    res = tuple(np.sqrt(np.sum(cwt**2, axis=1) / np.shape(cwt)[1]))
+
+    return {'WVL_energy_{k}': v for k, v in enumerate(res)}
