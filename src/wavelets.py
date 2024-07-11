@@ -169,9 +169,9 @@ def wavelet(signal, function=ricker, widths=np.arange(1, 10)):
     if isinstance(widths, str):
         widths = eval(widths)
 
-    cwt = cwt(signal, function, widths)
+    _cwt = cwt(signal, function, widths)
 
-    return cwt
+    return _cwt
 def wavelet_entropy(signal, function=ricker, widths=np.arange(1, 10)):
     """Computes CWT entropy of the signal.
 

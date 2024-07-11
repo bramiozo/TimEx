@@ -75,10 +75,25 @@ def get_interpolated(ts_df, id_col='ID', time_col='Time_days',
                      days_before=0,
                      max_days=365,
                      time_res=7,
+                     keep_t0_value=False,
                      df_out=False):
-    # use monotonic cubic splines
+    '''
+    Extract interpolated time series data.
+
+    :param ts_df: pd.DataFrame, time series data
+    :param id_col: str, default 'ID'
+    :param time_col: str, time column
+    :param val_col: str, default 'eGFR_CKDEpi2012'
+    :param days_before: int, how many days before t0 to include
+    :param max_days: int, maximum number of days to include
+    :param time_res: int, time resolution of time series
+    :param keep_t0_value: boolean, whether to keep t0 value
+    :param df_out: boolean, whether to output dataframe
+    '''
     trange = np.arange(-days_before, max_days, time_res)
-    
+    if (keep_t0_value) & (days_before>0):
+        trange = np.insert(trange, 1, 0)
+
     res = {id_col: [], time_col: [], val_col: []}
     for _id in tqdm(ts_df[id_col].unique()):
         _df = ts_df.loc[ts_df[id_col]==_id][[time_col, val_col]]

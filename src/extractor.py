@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import logging
 import joblib
+import scipy.stats
 
 from scipy.stats import skew, kurtosis, entropy as _entropy, linregress, median_abs_deviation
 from scipy.fft import rfft, rfftfreq, dct
@@ -212,7 +213,7 @@ class Extractor:
         self.features = {}
         self.duration_dict = defaultdict(float)
     
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+    def fit(self, df, id_col='id', val_col='value', time_col='dt', shape_comparison=False):
         #TODO: streamline kwargs for internal functions...
         df = df.sort_values(by=[id_col, time_col])
         num_series = df[id_col].nunique()
@@ -250,13 +251,16 @@ class Extractor:
             entr_2nd_diff, time_entr2ndDiff = time_function(diff_entropy_2nd)(ts_data)
             entr_3rd_diff, time_entr3rdDiff = time_function(diff_entropy_3rd)(ts_data)
 
-            shape_comparisons, time_shape = time_function(shape_compare)(ts_data)
 
             _peak_over_mean, time_peak_o_mean = time_function(peak_over_mean)(ts_data)
             _peak_over_median, time_peak_o_median = time_function(peak_over_median)(ts_data)
             _first_gradient, time_first_gradient = time_function(first_gradient)(ts_data)
             _second_gradient, time_second_gradient = time_function(second_gradient)(ts_data)
             _last_gradient, time_last_gradient = time_function(last_gradient)(ts_data)
+
+            if shape_comparison:
+                shape_comparisons, time_shape = time_function(shape_compare)(ts_data)
+                self.duration_dict['time_shape'] += time_shape
 
             cumuvalues, time_cumuvalues = time_function(cumuvals)(ts_data)
 
@@ -281,7 +285,6 @@ class Extractor:
             self.duration_dict['time_entr1stDiff'] += time_entr1stDiff
             self.duration_dict['time_entr2ndDiff'] += time_entr2ndDiff
             self.duration_dict['time_entr3rdDiff'] += time_entr3rdDiff
-            self.duration_dict['time_shape'] += time_shape
             self.duration_dict['time_peak_o_mean'] += time_peak_o_mean
             self.duration_dict['time_peak_o_median'] += time_peak_o_median
             self.duration_dict['time_first_gradient'] += time_first_gradient
@@ -325,8 +328,8 @@ class Extractor:
                 'second_gradient': _second_gradient,
                 'last_gradient': _last_gradient,
             }
-            
-            res_dict.update(shape_comparisons)
+            if shape_comparison:
+                res_dict.update(shape_comparisons)
             res_dict.update(cumuvalues)
 
             self.features[_id] = res_dict
@@ -575,8 +578,17 @@ class KatzExtractor:
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
-                result, time_elapsed = time_function(fun)(ts_data)
+                try:
+                    result, time_elapsed = time_function(fun)(ts_data)
+                except Exception as e:
+                    # TODO: this is problematic because we don't carry the keys of results that are dictionaries
+                    result, time_elapsed = np.nan, np.nan
+                    # if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+                    #   result = {..}
+                    #print(f'Error: {e}. Fun: {f}')
+
                 if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+
                     res.update(result)
                 else:
                     res[f] = result
@@ -609,7 +621,6 @@ class TSFelExtractor:
             else TSFEL_FEATURES
         self.features = None
         self.duration_dict = defaultdict(float)
-    @staticmethod
     def tsfelfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
             'positive_turning': positive_turning,
@@ -646,7 +657,11 @@ class TSFelExtractor:
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
-                result, time_elapsed = time_function(fun)(ts_data)
+                try:
+                    # TODO: fix more gracefully
+                    result, time_elapsed = time_function(fun)(ts_data)
+                except:
+                    result, time_elapsed = np.nan, np.nan
                 if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
                          'wavelet_energy', 'mfcc', 'lpcc']:
                     res.update(result)
@@ -987,13 +1002,13 @@ def get_stl_features(
 
     return stl_features
 
-@jit(forceobj=True)
+#@jit(forceobj=False)
 def get_acf_features(
-    extra_args: Dict[str, bool],
-    default_status: bool,
     y_acf_list: List[float],
     diff1y_acf_list: List[float],
     diff2y_acf_list: List[float],
+    extra_args: Dict[str, bool],
+    default_status: bool=True,
 ) -> Dict[str,float]:
     """
     Aggregating extracted ACF features from get_acfpacf_features function.
@@ -1052,13 +1067,14 @@ def get_acf_features(
         'diff2y_acf5': diff2y_acf5,
         'seas_acf1': seas_acf1,
     }
-        
+
+#@jit(forceobj=False)
 def get_pacf_features(
-    extra_args: Dict[str, bool],
-    default_status: bool,
     y_pacf_list: List[float],
     diff1y_pacf_list: List[float],
     diff2y_pacf_list: List[float],
+    extra_args: Dict[str, bool],
+    default_status: bool=True,
 ) -> Dict[str,float]:
     """
     Aggregating extracted PACF features from get_acfpacf_features function.
@@ -1102,7 +1118,7 @@ def get_pacf_features(
         'seas_pacf1': seas_pacf1,
     }
 
-@jit(forceobj=True)
+#@jit(forceobj=False)
 def get_acfpacf_features(
         x: np.ndarray,
         acfpacf_lag: int = 6,
@@ -1110,101 +1126,94 @@ def get_acfpacf_features(
         extra_args: Optional[Dict[str, bool]] = None,
         default_status: bool = True,
     ) -> Dict[str, float]:
-        """
-        Calculate ACF and PACF based features. Calculate seasonal ACF, PACF based features.
 
-        Reference: https://stackoverflow.com/questions/36038927/whats-the-difference-between-pandas-acf-and-statsmodel-acf
-        R code: https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html
-        Paper: Meta-learning how to forecast time series
+    """
+    Calculate ACF and PACF based features. Calculate seasonal ACF, PACF based features.
 
-        Args:
-            x: The univariate time series array in the form of 1d numpy array.
-            acfpacf_lag: int; Largest lag number for returning ACF/PACF features
-                via statsmodels.
-            period: int; Seasonal period.
-            extra_args: A dictionary containing information for disabling
-                calculation of a certain feature. If None, no feature is disabled.
-            default_status: Default status of the switch for calculate the
-                features or not.
+    Reference: https://stackoverflow.com/questions/36038927/whats-the-difference-between-pandas-acf-and-statsmodel-acf
+    R code: https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html
+    Paper: Meta-learning how to forecast time series
 
-        Returns:
-            Aggregated ACF, PACF features.
-        """
+    Args:
+        x: The univariate time series array in the form of 1d numpy array.
+        acfpacf_lag: int; Largest lag number for returning ACF/PACF features
+            via statsmodels.
+        period: int; Seasonal period.
+        extra_args: A dictionary containing information for disabling
+            calculation of a certain feature. If None, no feature is disabled.
+        default_status: Default status of the switch for calculate the
+            features or not.
 
-        acfpacf_features = {
-            "y_acf1": np.nan,
-            "y_acf5": np.nan,
-            "diff1y_acf1": np.nan,
-            "diff1y_acf5": np.nan,
-            "diff2y_acf1": np.nan,
-            "diff2y_acf5": np.nan,
-            "y_pacf5": np.nan,
-            "diff1y_pacf5": np.nan,
-            "diff2y_pacf5": np.nan,
-            "seas_acf1": np.nan,
-            "seas_pacf1": np.nan,
-        }
-        if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
-            msg = (
-                "Length is shorter than period, or constant time series, "
-                "unable to calculate acf/pacf features"
-            )
-            logging.error(msg)
-            return acfpacf_features
+    Returns:
+        Aggregated ACF, PACF features.
+    """
+    _keys = ['y_acf1', 'y_acf5', 'diff1y_acf1', 'diff1y_acf5',
+             'diff2y_acf1', 'diff2y_acf5', 'y_pacf5', 'diff1y_pacf5',
+             'diff2y_pacf5', 'seas_acf1', 'seas_pacf1']
+    if extra_args is None:
+        extra_args = {k: True for k in _keys}
 
-        nlag = min(acfpacf_lag, len(x) - 2)
-
-        diff1x = [x[i] - x[i - 1] for i in range(1, len(x))]
-        diff2x = [diff1x[i] - diff1x[i - 1] for i in range(1, len(diff1x))]
-
-        y_acf_list = acf(x, fft=True, nlags=period)[1:]
-        diff1y_acf_list = acf(diff1x, fft=True, nlags=nlag)[1:]
-        diff2y_acf_list = acf(diff2x, fft=True, nlags=nlag)[1:]
-
-        y_pacf_list = pacf(x, nlags=period)[1:]
-
-        if (
-            _yule_walker_determinant(diff1x) == 0
-            or _yule_walker_determinant(diff2x) == 0
-        ):
-            logging.warning(
-                "Could not generate acfpacf features because input matrix is singular."
-            )
-            return acfpacf_features
-
-        diff1y_pacf_list = pacf(diff1x, nlags=nlag)[1:]
-        diff2y_pacf_list = pacf(diff2x, nlags=nlag)[1:]
-
-        (
-            acfpacf_features["y_acf1"],
-            acfpacf_features["y_acf5"],
-            acfpacf_features["diff1y_acf1"],
-            acfpacf_features["diff1y_acf5"],
-            acfpacf_features["diff2y_acf1"],
-            acfpacf_features["diff2y_acf5"],
-            acfpacf_features["seas_acf1"],
-        ) = get_acf_features(
-            extra_args,
-            default_status,
-            y_acf_list,
-            diff1y_acf_list,
-            diff2y_acf_list,
+    acfpacf_features = {
+        "y_acf1": np.nan,
+        "y_acf5": np.nan,
+        "diff1y_acf1": np.nan,
+        "diff1y_acf5": np.nan,
+        "diff2y_acf1": np.nan,
+        "diff2y_acf5": np.nan,
+        "y_pacf5": np.nan,
+        "diff1y_pacf5": np.nan,
+        "diff2y_pacf5": np.nan,
+        "seas_acf1": np.nan,
+        "seas_pacf1": np.nan,
+    }
+    if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
+        msg = (
+            "Length is shorter than period, or constant time series, "
+            "unable to calculate acf/pacf features"
         )
+        logging.error(msg)
+        return acfpacf_features
 
-        # getting PACF features
-        (
-            acfpacf_features["y_pacf5"],
-            acfpacf_features["diff1y_pacf5"],
-            acfpacf_features["diff2y_pacf5"],
-            acfpacf_features["seas_pacf1"],
-        ) = get_pacf_features(
-            extra_args,
-            default_status,
-            y_pacf_list,
-            diff1y_pacf_list,
-            diff2y_pacf_list,
+    nlag = min(acfpacf_lag, len(x) - 2)
+
+    diff1x = [x[i] - x[i - 1] for i in range(1, len(x))]
+    diff2x = [diff1x[i] - diff1x[i - 1] for i in range(1, len(diff1x))]
+
+    y_acf_list = acf(x, fft=True, nlags=period)[1:]
+    diff1y_acf_list = acf(diff1x, fft=True, nlags=nlag)[1:]
+    diff2y_acf_list = acf(diff2x, fft=True, nlags=nlag)[1:]
+
+    y_pacf_list = pacf(x, nlags=period)[1:]
+
+    if (
+        _yule_walker_determinant(diff1x) == 0
+        or _yule_walker_determinant(diff2x) == 0
+    ):
+        logging.warning(
+            "Could not generate acfpacf features because input matrix is singular."
         )
         return acfpacf_features
+
+    diff1y_pacf_list = pacf(diff1x, nlags=nlag)[1:]
+    diff2y_pacf_list = pacf(diff2x, nlags=nlag)[1:]
+
+    acfpacf_features.update(get_acf_features(
+                            y_acf_list,
+                            diff1y_acf_list,
+                            diff2y_acf_list,
+                            extra_args,
+                            default_status,
+                        ))
+
+    # getting PACF features
+    acfpacf_features.update(get_pacf_features(
+                            y_pacf_list,
+                            diff1y_pacf_list,
+                            diff2y_pacf_list,
+                            extra_args,
+                            default_status,
+                        ))
+    return {k: v for k, v in acfpacf_features.items() if v in _keys}
 
 def _yule_walker_determinant(x_list: List[float]) -> float:
         x = np.array(x_list, dtype=np.float64)
@@ -1411,7 +1420,6 @@ def get_hw_params(
         logging.warning(f"Holt-Winters failed {e}")
     return hw_params_features
 
-@jit(nopython=True)
 def negative_turning(signal):
     """Computes number of negative turning points of the signal.
 
@@ -1431,7 +1439,6 @@ def negative_turning(signal):
     negative_turning_pts = np.where((diff_sig[array_signal] < 0) & (diff_sig[array_signal + 1] > 0))[0]
 
     return len(negative_turning_pts)
-@jit(nopython=True)
 def positive_turning(signal):
     """Computes number of positive turning points of the signal.
 
@@ -1455,7 +1462,6 @@ def positive_turning(signal):
 
     return len(positive_turning_pts)
 
-@jit(nopython=True)
 def travelled_distance(signal):
     """Computes signal traveled distance.
 
@@ -1477,7 +1483,6 @@ def travelled_distance(signal):
     diff_sig = np.diff(signal).astype(float)
     return np.sum([np.sqrt(1 + diff_sig**2)])
 
-@jit(nopython=True)
 def auc(signal, fs=1):
     """Computes the area under the curve of the signal computed with trapezoid
     rule.
@@ -1537,7 +1542,7 @@ def median_abs_deviation(signal):
     float
         Mean absolute deviation result
     """
-    return median_abs_deviation(signal, scale=1)
+    return scipy.stats.median_abs_deviation(signal, scale=1)
 
 def ecdf(signal, d=10):
     """Computes the values of ECDF (empirical cumulative distribution function)
@@ -1563,7 +1568,6 @@ def ecdf(signal, d=10):
     else:
         return tuple(y[:d])
 
-@jit(nopython=True)
 def _compute_time(signal, fs):
     """Creates the signal correspondent time array.
 
@@ -1582,7 +1586,6 @@ def _compute_time(signal, fs):
 
     return np.arange(0, len(signal)) / fs
 
-@jit(nopython=True)
 def _calc_lempel_ziv_complexity(sequence):
     """Manual implementation of the Lempel-Ziv complexity.
 
@@ -2047,7 +2050,11 @@ def spectral_roll_off(signal, fs=1):
     cum_ff = np.cumsum(fmag)
     value = 0.95 * (np.sum(fmag))
 
-    return f[np.where(cum_ff >= value)[0][0]]
+    try:
+        return f[np.where(cum_ff >= value)[0][0]]
+    except:
+        return np.nan
+
 
 
 def spectral_roll_on(signal, fs=1):
@@ -2111,7 +2118,7 @@ def spectral_entropy(signal, fs=1):
 
     return -np.multiply(prob, np.log2(prob)).sum() / np.log2(prob.size)
 
-def mfcc(signal, fs, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22):
+def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22):
     """Computes the MEL cepstral coefficients.
 
     It provides the information about the power in each frequency band.
@@ -2481,15 +2488,6 @@ def shape_compare(x: np.ndarray) -> dict:
         out_dict = {name: result for (name, _), result in zip(series_list, results)}
 
     except Exception as e:
-        print(f"Shape Sim error: {e}")
-        print(f"Shapes: "
-              f"{ts_fUtD.mean()}, "
-              f"{ts_fDtU.mean()}, "
-              f"{ts_fUtS.mean()}, "
-              f"{ts_fDtS.mean()},"
-              f"{ts_fStD.mean()},"
-              f"{ts_fStU.mean()}")
-        print(f"X shape: {x.shape}")
         return {
             'sim_linup': np.nan,
             'sim_lindown': np.nan,
