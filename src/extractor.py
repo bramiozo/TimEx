@@ -2507,4 +2507,70 @@ def shape_compare(x: np.ndarray) -> dict:
     return out_dict
 
 
+def FourierCoefficients(timeseries, number_of_components):
+    """
+    Calculate the Fourier coefficients for a given time series.
 
+    Parameters:
+    timeseries (array-like): The input time series data.
+    number_of_components (int): The number of Fourier components to calculate.
+
+    Returns:
+    np.ndarray: Fourier coefficients (complex numbers).
+    """
+    N = len(timeseries)
+    # Compute the Fourier Transform
+    fft_result = np.fft.fft(timeseries)
+    # Normalize and select the first 'number_of_components' coefficients
+    coefficients = fft_result[:number_of_components] / N
+    return coefficients
+
+
+def ReconstructTimeSeries(FourierComponents, Length_of_timeseries, MeanValue):
+    """
+    Reconstruct a time series from its Fourier components.
+
+    Parameters:
+    FourierComponents (array-like): The Fourier coefficients (complex numbers).
+    Length_of_timeseries (int): The length of the original time series.
+    MeanValue (float): The mean value of the original time series.
+
+    Returns:
+    np.ndarray: Reconstructed time series.
+    """
+    N = Length_of_timeseries
+    # Initialize the reconstructed series
+    reconstructed_series = np.zeros(N)
+
+    # Reconstruct the time series
+    for k in range(len(FourierComponents)):
+        amplitude = np.abs(FourierComponents[k])
+        phase = np.angle(FourierComponents[k])
+        reconstructed_series += amplitude * np.cos(2 * np.pi * k * np.arange(N) / N + phase)
+
+    # Add the mean value
+    reconstructed_series += MeanValue
+
+    return reconstructed_series
+
+
+@njit
+def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
+    '''
+        Function to get n-regularly spaced kth order discrete differences
+        Note: this function only makes sense if absolute timing is important.
+
+        ts: homogeneous time series
+        k: number of points in regular intervals
+        n: max order of the discrete differences
+
+        return: [n-regularly spaced differences * order of the differences]
+    '''
+    N = len(ts)
+    res = []
+    diffs = ts
+    for _n in range(n):
+        ts_step = (N - _n) // k
+        diffs = np.diff(diffs)
+        res.extend(diffs[np.arange(0, len(diffs), ts_step)])
+    return res

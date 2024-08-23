@@ -7,8 +7,31 @@ license = "GPL-3"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "3.10.5"
+scipy = "^1.14.1"
+tqdm = "^4.66.5"
+pandas = "^2.2.2"
+statsmodels = "^0.14.2"
+networkx = "^3.3"
+scikit-learn = "^1.5.1"
+scikit-lego = "^0.9.1"
+sktime = "^0.32.1"
+dtaidistance = "^2.3.12"
+tslearn = "^0.6.3"
+dcor = "^0.6"
+matplotlib = "^3.9.2"
+pywavelets = "^1.7.0"
+pymannkendall = "^1.4.3"
+pycatch22 = "^0.4.5"
+tsfresh = "^0.20.3"
+antropy = "^0.1.6"
+nolds = "^0.6.0"
+fastdtw = "^0.3.4"
+meegkit = "^0.1.7"
 
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
 
 [build-system]
 requires = ["poetry-core"]

@@ -3,6 +3,9 @@
 # the beta-VAE model and the training process
 # the Time-MAE model
 
+# 1D VAE
+# 2D VAE
+
 # https://github.com/mqwfrog/ULTS
 # TS2Vec model (requires classes): https://github.com/zhihanyue/ts2vec
 # TimeCLR https://www.sciencedirect.com/science/article/pii/S0950705122002726
