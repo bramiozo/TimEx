@@ -16,3 +16,17 @@
 # TST https://arxiv.org/abs/2010.02803, https://github.com/gzerveas/mvts_transformer
 # TS-TCC https://arxiv.org/abs/2208.06616, https://github.com/emadeldeen24/TS-TCC
 
+import torch
+class ECGxAI:
+    '''
+        Wrapper around ECGxAI
+        Paper: https://www.ahajournals.org/doi/full/10.1161/JAHA.119.015138
+        Github: https://github.com/bramiozo/ecgxai
+        Pre-trained model:
+
+        pre-trained beta-VAE for 12-lead ECG signals. Good basis for miniECG
+    '''
+
+    pass
+
+
