@@ -28,7 +28,7 @@ antropy = "^0.1.6"
 nolds = "^0.6.0"
 fastdtw = "^0.3.4"
 meegkit = "^0.1.7"
-
+pydmd = "^1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"

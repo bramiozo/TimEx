@@ -32,7 +32,7 @@ from tqdm import tqdm
 import sys, os
 import pandas as pd 
 
-from numba import jit
+from numba import jit, njit
 import gc
 
 from collections import defaultdict
@@ -264,6 +264,17 @@ class Extractor:
 
             cumuvalues, time_cumuvalues = time_function(cumuvals)(ts_data)
 
+            fourcoeffs, time_fourcoeffs = time_function(extract_fft_features)(ts_data,
+                                                                              num_features=8,
+                                                                              max_frequency=40
+                                                                              )
+
+            wavelet_coeffs, time_wavelet_coeffs = time_function(wavelets.extract_wavelet_features)(ts_data,
+                                                                                                   level=3,
+                                                                                                   num_features=5)
+
+            peak_and_valleys, time_peak_and_val = time_function(extract_peaks_and_valleys)(ts_data, N=5)
+
             self.duration_dict['time_mean'] += time_mean
             self.duration_dict['time_min'] += time_min
             self.duration_dict['time_max'] += time_max
@@ -291,6 +302,9 @@ class Extractor:
             self.duration_dict['time_second_gradient'] += time_second_gradient
             self.duration_dict['time_last_gradient'] += time_last_gradient
             self.duration_dict['time_cumuvalues'] += time_cumuvalues
+            self.duration_dict['time_fourcoeffs'] += time_fourcoeffs
+            self.duration_dict['time_wavelet_coeffs'] += time_wavelet_coeffs
+            self.duration_dict['time_peak_and_val'] += time_peak_and_val
 
             # Store the features for the current ID
             res_dict = {
@@ -331,6 +345,9 @@ class Extractor:
             if shape_comparison:
                 res_dict.update(shape_comparisons)
             res_dict.update(cumuvalues)
+            res_dict.update(fourcoeffs)
+            res_dict.update(wavelet_coeffs)
+            res_dict.update(peak_and_valleys)
 
             self.features[_id] = res_dict
         self.duration_dict = {k:v/num_series for k,v in self.duration_dict.items()}
@@ -2525,35 +2542,6 @@ def FourierCoefficients(timeseries, number_of_components):
     coefficients = fft_result[:number_of_components] / N
     return coefficients
 
-
-def ReconstructTimeSeries(FourierComponents, Length_of_timeseries, MeanValue):
-    """
-    Reconstruct a time series from its Fourier components.
-
-    Parameters:
-    FourierComponents (array-like): The Fourier coefficients (complex numbers).
-    Length_of_timeseries (int): The length of the original time series.
-    MeanValue (float): The mean value of the original time series.
-
-    Returns:
-    np.ndarray: Reconstructed time series.
-    """
-    N = Length_of_timeseries
-    # Initialize the reconstructed series
-    reconstructed_series = np.zeros(N)
-
-    # Reconstruct the time series
-    for k in range(len(FourierComponents)):
-        amplitude = np.abs(FourierComponents[k])
-        phase = np.angle(FourierComponents[k])
-        reconstructed_series += amplitude * np.cos(2 * np.pi * k * np.arange(N) / N + phase)
-
-    # Add the mean value
-    reconstructed_series += MeanValue
-
-    return reconstructed_series
-
-
 @njit
 def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
     '''
@@ -2574,3 +2562,67 @@ def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
         diffs = np.diff(diffs)
         res.extend(diffs[np.arange(0, len(diffs), ts_step)])
     return res
+
+def extract_peaks_and_valleys(y, N=10):
+    # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
+    # Find peaks and valleys
+    peaks, _ = find_peaks(y)
+    valleys, _ = find_peaks(-y)
+
+    # Combine peaks and valleys
+    all_extrema = np.concatenate((peaks, valleys))
+    all_values = np.concatenate((y[peaks], -y[valleys]))
+
+    # Sort by absolute amplitude (largest first)
+    sorted_indices = np.argsort(-np.abs(all_values))
+    sorted_extrema = all_extrema[sorted_indices]
+    sorted_values = all_values[sorted_indices]
+
+    # Select the top N extrema
+    top_extrema = sorted_extrema[:N]
+    top_values = sorted_values[:N]
+
+    # Pad with zeros if fewer than N extrema are found
+    if len(top_extrema) < N:
+        padding = 10 - len(top_extrema)
+        top_extrema = np.pad(top_extrema, (0, padding), 'constant', constant_values=0)
+        top_values = np.pad(top_values, (0, padding), 'constant', constant_values=0)
+
+    # Prepare the features
+    features = []
+    for i in range(N):
+        features.append(top_values[i])
+        features.append(top_extrema[i])
+
+    # Create a dictionary of features
+    feature_dict = {f'peak_{i+1}': features[2*i] for i in range(N)}
+    feature_dict.update({f'loc_{i+1}': features[2*i+1] for i in range(N)})
+
+    return feature_dict
+
+def extract_fft_features(y, x=None,  num_features = 5,max_frequency = 40):
+  # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
+  y= y -np.mean(y)
+  # Perform the Fourier Transform
+  Y = np.fft.fft(y)
+  # Calculate the frequency bins
+  if x is None:
+    x = np.linspace(0,len(y))
+  frequencies = np.fft.fftfreq(len(x), d=(x[1] - x[0]) / (2*np.pi))
+  Y_abs = 2*np.abs(Y) / len(x)
+  Y_abs[Y_abs < 1e-6] = 0
+  relevant_frequencies = np.where((frequencies>0) & (frequencies<max_frequency))
+  Y_phase = np.angle(Y)[relevant_frequencies]
+  frequencies = frequencies[relevant_frequencies]
+  Y_abs = Y_abs[relevant_frequencies]
+  largest_amplitudes = np.flip(np.argsort(Y_abs))[0:num_features]
+  top_5_amplitude = Y_abs[largest_amplitudes]
+  top_5_frequencies = frequencies[largest_amplitudes]
+  top_5_phases = Y_phase[largest_amplitudes]
+  fft_features = top_5_amplitude.tolist()+top_5_frequencies.tolist()+top_5_phases.tolist()
+  amp_keys = ['Amplitude '+str(i) for i in range(1,num_features+1)]
+  freq_keys = ['Frequency '+str(i) for i in range(1,num_features+1)]
+  phase_keys = ['Phase '+str(i) for i in range(1,num_features+1)]
+  fft_keys = amp_keys+freq_keys+phase_keys
+  fft_dict = {fft_keys[i]:fft_features[i] for i in range(len(fft_keys))}
+  return fft_dict

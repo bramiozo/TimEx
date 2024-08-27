@@ -3,7 +3,7 @@
 # the beta-VAE model and the training process
 # the Time-MAE model
 
-# 1D VAE
+# 1D VAE: https://towardsdatascience.com/vae-for-time-series-1dc0fef4bffa
 # 2D VAE
 
 # https://github.com/mqwfrog/ULTS
