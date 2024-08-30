@@ -306,3 +306,29 @@ def wavelet_energy(signal, function=ricker, widths=np.arange(1, 10)):
     res = tuple(np.sqrt(np.sum(cwt**2, axis=1) / np.shape(cwt)[1]))
 
     return {'WVL_energy_{k}': v for k, v in enumerate(res)}
+
+def extract_wavelet_features(y, wavelet='db4', level=3, num_features=5):
+    # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
+    y = y - np.mean(y)  # Remove the mean
+
+    # Perform the Discrete Wavelet Transform
+    coeffs = pywt.wavedec(y, wavelet, level=level)
+
+    # Flatten the list of coefficients into a single array
+    coeffs_flat = np.hstack(coeffs)
+
+    # Get the absolute values of the coefficients
+    coeffs_abs = np.abs(coeffs_flat)
+
+    # Find the indices of the largest coefficients
+    largest_coeff_indices = np.flip(np.argsort(coeffs_abs))[0:num_features]
+
+    # Extract the largest coefficients as features
+    top_coeffs = coeffs_flat[largest_coeff_indices]
+
+    # Generate feature names for the wavelet features
+    feature_keys = ['Wavelet Coeff ' + str(i+1) for i in range(num_features)]
+
+    # Create a dictionary for the features
+    wavelet_dict = {feature_keys[i]: top_coeffs[i] for i in range(num_features)}
+    return wavelet_dict
