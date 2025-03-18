@@ -1,4 +1,4 @@
-# This modules 
+# This modules
 # https://arxiv.org/abs/2308.01578
 # the beta-VAE model and the training process
 # the Time-MAE model
@@ -26,7 +26,65 @@ class ECGxAI:
 
         pre-trained beta-VAE for 12-lead ECG signals. Good basis for miniECG
     '''
+    def __init__(self):
+        pass
 
-    pass
+class TimeMAE:
+    '''
+        Time-MAE model
+        Paper: https://arxiv.org/abs/2111.08095
+        Github:
+    '''
+
+    def __init__(self):
+        pass
+
+class TimeCLR:
+    '''
+        TimeCLR model
+        Paper: https://www.sciencedirect.com/science/article/pii/S0950705122002726
+        Github:
+    '''
+    def __init__(self):
+        pass
+
+class TimeNet:
+    '''
+        TimeNet model
+        Paper: https://arxiv.org/abs/1706.08838
+        Github:
+    '''
+
+class InceptionTime:
+    '''
+        InceptionTime model
+        Paper: https://arxiv.org/abs/1909.04939
+        Github:
+    '''
+    def __init__(self):
+        pass
 
 
+class Time2Vec:
+    '''
+        Time2Vec model
+        Paper: https://arxiv.org/abs/1907.05321
+        Github:
+    '''
+    def __init__(self):
+        pass
+
+class Wav2Vec2:
+    '''
+        Wav2Vec2 model
+        Paper: https://arxiv.org/abs/2006.11477
+
+        ECG-FM: https://arxiv.org/abs/2408.05178
+        ECG-FM Github: https://github.com/bowang-lab/ECG-FM
+        Github:
+    '''
+    def __init__(self, model_name=''):
+        '''
+            model_name: str - model name or path
+        '''
+        pass
