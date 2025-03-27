@@ -8,8 +8,6 @@
 # lcmm: https://cran.r-project.org/web/packages/lcmm/index.html
 # flexmix: https://cran.r-project.org/web/packages/flexmix/index.html
 
-
 # LCMM
 # LCGA
 # Growing MM
-

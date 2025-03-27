@@ -17,6 +17,8 @@
 # TS-TCC https://arxiv.org/abs/2208.06616, https://github.com/emadeldeen24/TS-TCC
 
 import torch
+from transformers
+
 class ECGxAI:
     '''
         Wrapper around ECGxAI
@@ -54,6 +56,8 @@ class TimeNet:
         Paper: https://arxiv.org/abs/1706.08838
         Github:
     '''
+    def __init__(self):
+        pass
 
 class InceptionTime:
     '''
@@ -83,8 +87,7 @@ class Wav2Vec2:
         ECG-FM Github: https://github.com/bowang-lab/ECG-FM
         Github:
     '''
-    def __init__(self, model_name=''):
+    def __init__(self, model_name='wanglab/ecg-fm-preprint'):
         '''
             model_name: str - model name or path
         '''
-        pass

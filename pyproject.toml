@@ -28,14 +28,15 @@ antropy = "^0.1.6"
 nolds = "^0.6.0"
 fastdtw = "^0.3.4"
 meegkit = "^0.1.7"
-pydmd = "^1.0.0"
 python = ">3.10,<3.13"
-numpy = "^2.0.0"
+numpy = "^1.26.4"
 cesium = "^0.12.1"
 torch = "^2.3.1"
+fairseq = "^0.12.2"
+wfdb = ">=4.2.0"
 
 [tool.poetry.group.dev.dependencies]
-jupyter = "^1.0.0"
+jupyter = ">=1.1.1"
 
 [build-system]
 requires = ["poetry-core"]
