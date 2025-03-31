@@ -25,6 +25,7 @@ Using features  from
   * wavelet
   * FFT
   * Mann-Kendall
+* Neurokit2
  
  TODO:  use tsflex to improve performance of feature  extraction.
 
@@ -40,7 +41,6 @@ Using
 # Direct sparse coding of timeseries (DSC)
 
 ```timeseries -> low-ranking representation```
-
 
 
 # Cluster
@@ -59,8 +59,6 @@ Using
 
 
 
-
-
 # Examples
 https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
 
@@ -68,4 +66,7 @@ https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
 # Acknowledgments
 
 * https://github.com/nikdon/pyEntropy
+
+# Sources
+* https://link.springer.com/article/10.1186/s12938-023-01075-1
   
