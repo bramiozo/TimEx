@@ -31,11 +31,12 @@ meegkit = "^0.1.7"
 python = ">3.10,<3.13"
 numpy = "^1.26.4"
 cesium = "^0.12.1"
-torch = "^2.3.1"
 fairseq = "^0.12.2"
 wfdb = ">=4.2.0"
 neurokit2 = "^0.2.10"
 python-dotenv = "^1.1.0"
+torch = {version = "^2.2.2+cu121", source = "pytorch"}
+
 
 [tool.poetry.group.dev.dependencies]
 jupyter = ">=1.1.1"
@@ -43,3 +44,8 @@ jupyter = ">=1.1.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
