@@ -4,10 +4,17 @@ Repository for extracting time-series features and clusters
 # **Normalisation**
 
 
+
 # **Interpolation**
 
 
+
 # **Smoothing** 
+
+
+
+# **Detrending**
+
 
 
 # **Crossectional feature extraction** (CFE)
@@ -19,7 +26,7 @@ Using features  from
 * nolds
 * cesium
 * CNN/RNN based bottlenecks
-* LLM-based bottlenecks
+* LLM-based bottlenecks??
 * Custom functions:
   * Added:
   * wavelet
@@ -27,7 +34,7 @@ Using features  from
   * Mann-Kendall
 * Neurokit2
  
- TODO:  use tsflex to improve performance of feature  extraction.
+*TODO:*  use tsflex to improve performance of feature  extraction.
 
 # **Timeseries distance matrices** (TDM):
 Using 
@@ -40,7 +47,7 @@ Using
 
 # Direct sparse coding of timeseries (DSC)
 
-```timeseries -> low-ranking representation```
+```timeseries -> low-ranking representation with SAEs```
 
 
 # Cluster
