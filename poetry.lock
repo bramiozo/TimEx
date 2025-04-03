@@ -3833,6 +3833,52 @@ python-versions = "*"
 files = [
     {file = "nolds-0.6.0-py2.py3-none-any.whl", hash = "sha256:e7f1e30e3ece7db1fcb774d27effa4551736f314623087a808e21cef62ece5a6"},
 =======
+<<<<<<< Updated upstream
+=======
+version = "3.4.2"
+description = "Python package for creating and manipulating graphs and networks"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "networkx-3.4.2-py3-none-any.whl", hash = "sha256:df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f"},
+    {file = "networkx-3.4.2.tar.gz", hash = "sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1"},
+]
+
+[package.extras]
+default = ["matplotlib (>=3.7)", "numpy (>=1.24)", "pandas (>=2.0)", "scipy (>=1.10,!=1.11.0,!=1.11.1)"]
+developer = ["changelist (==0.5)", "mypy (>=1.1)", "pre-commit (>=3.2)", "rtoml"]
+doc = ["intersphinx-registry", "myst-nb (>=1.1)", "numpydoc (>=1.8.0)", "pillow (>=9.4)", "pydata-sphinx-theme (>=0.15)", "sphinx (>=7.3)", "sphinx-gallery (>=0.16)", "texext (>=0.6.7)"]
+example = ["cairocffi (>=1.7)", "contextily (>=1.6)", "igraph (>=0.11)", "momepy (>=0.7.2)", "osmnx (>=1.9)", "scikit-learn (>=1.5)", "seaborn (>=0.13)"]
+extra = ["lxml (>=4.6)", "pydot (>=3.0.1)", "pygraphviz (>=1.14)", "sympy (>=1.10)"]
+test = ["pytest (>=7.2)", "pytest-cov (>=4.0)"]
+
+[[package]]
+name = "neurokit2"
+version = "0.2.10"
+description = "The Python Toolbox for Neurophysiological Signal Processing."
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "neurokit2-0.2.10-py2.py3-none-any.whl", hash = "sha256:43b859595100fb862c3bacc6b6b027fe4aef7aff3d35f7e23fb79fd116fbe936"},
+    {file = "neurokit2-0.2.10.tar.gz", hash = "sha256:31e4eb2a187aa0c8eb26a63d0ef9072891d6b6d4dde384d9691b82074d539aba"},
+]
+
+[package.dependencies]
+matplotlib = "*"
+numpy = "*"
+pandas = "*"
+requests = "*"
+scikit-learn = ">=1.0.0"
+scipy = "*"
+
+[package.extras]
+test = ["EMD-signal", "EntropyHub", "PyWavelets", "antropy", "astropy", "bioread", "biosppy (==0.6.1)", "coverage", "cvxopt", "matplotlib", "mne", "nolds", "numpy", "pandas", "plotly", "pyentrp", "pytest", "requests", "scikit-learn (>=1.0.0)", "scipy", "ts2vg"]
+
+[[package]]
+name = "nolds"
+>>>>>>> Stashed changes
 version = "0.6.1"
 description = "Nonlinear measures for dynamical systems (based on one-dimensional time series)"
 optional = false
@@ -5070,6 +5116,7 @@ files = [
 six = ">=1.5"
 
 [[package]]
+<<<<<<< Updated upstream
 name = "python-json-logger"
 <<<<<<< Updated upstream
 version = "2.0.7"
@@ -5091,6 +5138,25 @@ files = [
     {file = "pytz-2024.1-py2.py3-none-any.whl", hash = "sha256:328171f4e3623139da4983451950b28e95ac706e13f3f2630a879749e7a8b319"},
     {file = "pytz-2024.1.tar.gz", hash = "sha256:2a29735ea9c18baf14b448846bde5a48030ed267578472d8955cd0e7443a9812"},
 =======
+<<<<<<< Updated upstream
+=======
+name = "python-dotenv"
+version = "1.1.0"
+description = "Read key-value pairs from a .env file and set them as environment variables"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "python_dotenv-1.1.0-py3-none-any.whl", hash = "sha256:d7c01d9e2293916c18baf562d95698754b0dbbb5e74d457c45d4f6561fb9d55d"},
+    {file = "python_dotenv-1.1.0.tar.gz", hash = "sha256:41f90bc6f5f177fb41f53e87666db362025010eb28f60a01c9143bfa33a2b2d5"},
+]
+
+[package.extras]
+cli = ["click (>=5.0)"]
+
+[[package]]
+name = "python-json-logger"
+>>>>>>> Stashed changes
 version = "3.3.0"
 description = "JSON Log Formatter for the Python Logging Package"
 optional = false
@@ -7504,5 +7570,9 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">3.10,<3.13"
+<<<<<<< Updated upstream
 content-hash = "07013ab1599aa03bc52414a6ddfb51736da903c863a3fcaaaa4470010c86476a"
+=======
+content-hash = "804573d5e4b44e83926f7c6a436a052d588e86f399a108aa49b09f807fc21796"
+>>>>>>> Stashed changes
 >>>>>>> Stashed changes

@@ -8,6 +8,7 @@ from tsfresh.feature_extraction import extract_features
 import pandas as pd
 import torch
 import os
+import sys
 import gc
 import time
 import wfdb
@@ -20,6 +21,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+
+sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
+import extractor
+import wavelets
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
@@ -96,7 +101,15 @@ class ECGxtract():
     def _wavelet_features(self, signal: ndarray):
         # Continuous Wavelet Transform (CWT) based features
         coefs, freqs = nk.signal_cwt(signal, sampling_rate=self.sampling_rate)
-        return coefs.mean(axis=1)  # using mean power across frequencies
+    
+        wvc = wavelets.extract_wavelet_features(signal, wavelet='db4', 
+                                                level=3, num_features=6)
+        fcs = extractor.extract_fft_features(signal, num_features=8, 
+                                             max_frequency=40)
+
+        return np.concat([coefs.mean(axis=1),
+                          wvc,
+                          fcs])
 
     def _extractor_features(self, signal: ndarray):
         features = []
