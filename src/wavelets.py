@@ -4,7 +4,7 @@ import pywt
 from typing import List, Union, Literal, Generator, Tuple
 
 from scipy.fft import fft, fftfreq
-from scipy.signal import ShortTimeFFT, stft, ricker, cwt
+from scipy.signal import ShortTimeFFT, stft
 from scipy.signal.windows import gaussian
 from scipy.signal import spectrogram, get_window
 
@@ -143,7 +143,7 @@ def SpectroGramEmbedder():
     def __init__(self, method: Literal['ravel', 'image_embedder']):
         pass
 
-def wavelet(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT (continuous wavelet transform) of the signal.
 
     Parameters
@@ -169,10 +169,10 @@ def wavelet(signal, function=ricker, widths=np.arange(1, 10)):
     if isinstance(widths, str):
         widths = eval(widths)
 
-    _cwt = cwt(signal, function, widths)
+    _cwt = pywt.cwt(signal, widths, function)
 
     return _cwt
-def wavelet_entropy(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet_entropy(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT entropy of the signal.
 
     Implementation details in:
@@ -208,7 +208,7 @@ def wavelet_entropy(signal, function=ricker, widths=np.arange(1, 10)):
     return w_entropy
 
 
-def wavelet_abs_mean(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet_abs_mean(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT absolute mean value of each wavelet scale.
 
     Feature computational cost: 2
@@ -232,7 +232,7 @@ def wavelet_abs_mean(signal, function=ricker, widths=np.arange(1, 10)):
     return {'WVL_amean_{k}': v for k, v in enumerate(res)}
 
 
-def wavelet_std(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet_std(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT std value of each wavelet scale.
 
     Feature computational cost: 2
@@ -256,7 +256,7 @@ def wavelet_std(signal, function=ricker, widths=np.arange(1, 10)):
     return {'WVL_std_{k}': v for k, v in enumerate(res)}
 
 
-def wavelet_var(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet_var(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT variance value of each wavelet scale.
 
     Feature computational cost: 2
@@ -279,7 +279,7 @@ def wavelet_var(signal, function=ricker, widths=np.arange(1, 10)):
     res = tuple(np.var(wavelet(signal, function, widths), axis=1))
     return {'WVL_var_{k}': v for k, v in enumerate(res)}
 
-def wavelet_energy(signal, function=ricker, widths=np.arange(1, 10)):
+def wavelet_energy(signal, function='mexh', widths=np.arange(1, 10)):
     """Computes CWT energy of each wavelet scale.
 
     Implementation details:

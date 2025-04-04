@@ -23,7 +23,7 @@ matplotlib = "^3.9.2"
 pywavelets = "^1.7.0"
 pymannkendall = "^1.4.3"
 pycatch22 = "^0.4.5"
-tsfresh = "^0.20.3"
+tsfresh = "0.21.0"
 antropy = "^0.1.6"
 nolds = "^0.6.0"
 fastdtw = "^0.3.4"
@@ -36,6 +36,8 @@ wfdb = ">=4.2.0"
 neurokit2 = "^0.2.10"
 python-dotenv = "^1.1.0"
 torch = {version = "^2.2.2+cu121", source = "pytorch"}
+pywavelet = "^0.2.7"
+pyarrow = "^19.0.1"
 
 
 [tool.poetry.group.dev.dependencies]

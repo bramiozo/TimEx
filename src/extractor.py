@@ -6,15 +6,16 @@ import scipy.stats
 
 from scipy.stats import skew, kurtosis, entropy as _entropy, linregress, median_abs_deviation
 from scipy.fft import rfft, rfftfreq, dct
-from scipy.signal import cwt, ricker, periodogram, welch, find_peaks
+from scipy.signal import periodogram, welch, find_peaks
 from scipy.linalg import toeplitz
 from scipy import signal
+from pywt import cwt
 
 import pymannkendall as mk
 from tqdm import tqdm
 
 import pycatch22 
-from sktime.transformations.panel import catch22
+#from sktime.transformations.panel import catch22
 import tsfresh
 from tsfresh import extract_features, select_features, extract_relevant_features
 from tsfresh.utilities.dataframe_functions import impute
@@ -882,10 +883,7 @@ def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
         The Hurst Exponent of the time series array
     """
 
-    # Create the range of lag values
-    lags = range(2, min(lag_size, len(x) - 1))
-
-    # Calculate the array of the variances of the lagged differences
+    # Create the range of cwt( of the variances of the lagged differences
     tau = [np.std(np.asarray(x)[lag:] - np.asarray(x)[:-lag]) for lag in lags]
 
     # Use a linear fit to estimate the Hurst Exponent
@@ -938,7 +936,7 @@ def _wavelet_transform_feature(data: np.ndarray) -> float:
     # For simplicity, we return the mean of the wavelet coefficients here.
     # Replace this with your actual wavelet feature extraction logic.
     widths = np.arange(1, 31)
-    cwtmatr = cwt(data, ricker, widths)
+    cwtmatr = cwt(data, widths, 'mexh')
     return np.mean(cwtmatr)
 
 @jit(forceobj=True)
@@ -972,12 +970,7 @@ def get_stl_features(
 
     Args:
         x: The univariate time series array in the form of 1d numpy array.
-        period: int; Period parameter for performing seasonality trend
-            decomposition using LOESS with statsmodels.
-        extra_args: A dictionary containing information for disabling
-            calculation of a certain feature. If None, no feature is
-            disabled.
-        default_status: Default status of the switch for calculate the
+        period: int; Periocwt(efault status of the switch for calculate the
             features or not.
 
     Returns:
@@ -1028,10 +1021,7 @@ def get_acf_features(
     default_status: bool=True,
 ) -> Dict[str,float]:
     """
-    Aggregating extracted ACF features from get_acfpacf_features function.
-
-    Args:
-        extra_args: A dictionary containing information for disabling calculation
+    Aggregating extracted Acwt(onary containing information for disabling calculation
             of a certain feature. If None, no feature is disabled.
         default_status: Default status of the switch for calculate the
             features or not.
@@ -1120,13 +1110,7 @@ def get_pacf_features(
     if extra_args.get("diff1y_pacf5", default_status):
         diff1y_pacf5 = np.nansum(np.asarray(diff1y_pacf_list)[:5] ** 2)
 
-    # diff2y_pacf5: sum of squares of first 5 PACF values of twice-differenced series
-    if extra_args.get("diff2y_pacf5", default_status):
-        diff2y_pacf5 = np.nansum(np.asarray(diff2y_pacf_list)[:5] ** 2)
-
-    # Patial Autocorrelation coefficient at the first seasonal lag.
-    if extra_args.get("seas_pacf1", default_status):
-        seas_pacf1 = y_pacf_list[-1]
+    # diff2y_pacf5: sum of squares ocwt(
 
     return {
         'pacf5': y_pacf5,
@@ -1506,18 +1490,8 @@ def auc(signal, fs=1):
 
     Feature computational cost: 1
 
-    Parameters
-    ----------
-    signal : nd-array
-        Input from which the area under the curve is computed
-    fs : float
-        Sampling Frequency
-    Returns
-    -------
-    float
-        The area under the curve value
+    Parametersimport ecg
     """
-    t = _compute_time(signal, fs)
 
     return np.sum(0.5 * np.diff(t) * np.abs(np.array(signal[:-1]) + np.array(signal[1:])))
 
