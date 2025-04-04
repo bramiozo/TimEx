@@ -239,11 +239,11 @@ class ECGDataset(Dataset):
         """
         if isinstance(source, str) and source.endswith('.npy'):
             signal = np.load(source)
-            record = None  # No WFDB record available
+            comment = None  # No WFDB record available
         elif isinstance(source, str) and source.endswith('.h5'):
             with h5py.File(source, 'r') as f:
                 signal = f['ecg'][:]  # or the correct key
-            record = None  # No WFDB record available
+            comment = None  # No WFDB record available
         elif isinstance(source, str) and os.path.isdir(source):
             # Load and stack individual lead files (e.g. lead_1.npy, lead_2.npy, ...)
             leads = []
@@ -251,15 +251,16 @@ class ECGDataset(Dataset):
                 lead_file = os.path.join(source, f'lead_{i}.npy')
                 leads.append(np.load(lead_file))
             signal = np.stack(leads, axis=0)
-            record = None  # No WFDB record available
+            comment = None  # No WFDB record available
         elif isinstance(source, str) and source.endswith('.hea'):
             record = wfdb.rdrecord(source.strip('.hea'))
             self.fs = record.fs
             signal = record.p_signal.T
+            comment = ",".join(record.__dict__['comments'])
         else:
             raise ValueError(f"Unsupported input source: {source}")
 
-        return torch.tensor(signal, dtype=torch.float32), record
+        return torch.tensor(signal, dtype=torch.float32), comment
 
 
     def augment_signal(self, signal):
@@ -492,7 +493,7 @@ class ECGDataset(Dataset):
 
             if self.extract_label and (record is not None):
                 try:
-                    label = re.findall(re_diagnosis, record.comments)[0][1]
+                    label = re.findall(re_diagnosis, record)[0][1]
                 except:
                     label = None
 
