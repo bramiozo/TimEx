@@ -101,7 +101,8 @@ class ECGxtract():
 
     def _smoothing(self, TimeSerie: ndarray) -> ndarray:
         # Default Neurokit smoothing (low-pass filtering)
-        return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate, **self.smoothing_kwargs)
+        return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate, 
+                                **self.smoothing_kwargs)
 
     def _trimming(self, TimeSerie: ndarray) -> ndarray:
         # Trim ECG between the first and last R-peaks
@@ -162,7 +163,8 @@ class ECGxtract():
     def _extract_single_multichannel(self, TimeSeries: NDArray2D) -> ndarray:
         assert TimeSeries.ndim == 2
 
-        features = [self._extract_features_for_single_channel(TimeSeries[:, ch]) for ch in range(TimeSeries.shape[1])]
+        features = [self._extract_features_for_single_channel(TimeSeries[:, ch]) 
+                    for ch in range(TimeSeries.shape[1])]
 
         # Concatenate all channel features
         return concatenate(features)
