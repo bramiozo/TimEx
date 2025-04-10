@@ -32,7 +32,6 @@ import extractor
 import wavelets
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
-re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z]+)', re.IGNORECASE)
 
 class Config:
     # Data settings
@@ -83,14 +82,24 @@ class Config:
     BALANCE_SAMPLING_BY_CLASS = True
 
 class ECGxtract():
+    p_wave_band = 0.5, 3      # P-wave components
+    qrs_complex_band = (4, 20)   # QRS complex components
+    t_wave_band = (0.5, 7)      # T-wave components
+    baseline_band = (0, 0.5)     # Baseline wander
+    mains_noise_band = (49, 51)  # 50Hz power line interference
+    low_freq_band = (0.04, 0.15) # low frequency
+    high_freq_band = (0.15, 0.4) # high frequency
+    noise_band = (40, 100)     # noise
+
     def __init__(self,
                  sampling_rate: int = 1000,
                  smoothing: bool = True,
                  trimming: bool = True,
                  extractor: Literal['catch22', 'tsfresh', 'both'] = 'catch22',
                  aggregation: Literal['concatenate'] = 'concatenate',
+                 extractors: List[Literal['extractor', 'wavelets', 'ecgspecific']] = ['wavelets'],
                  trimming_kwargs: Dict = {},
-                 smoothing_kwargs: Dict = {}):
+                 smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3}):
         self.sampling_rate = sampling_rate
         self.smoothing = smoothing
         self.trimming = trimming
@@ -98,7 +107,42 @@ class ECGxtract():
         self.aggregation = aggregation
         self.trimming_kwargs = trimming_kwargs
         self.smoothing_kwargs = smoothing_kwargs
+        self.extractors = extractors
 
+    @staticmethod
+    def _band_power(freqs, power, low, high):
+        # Calculate the band power between low and high frequencies
+        indices = np.logical_and(freqs >= low, freqs <= high)
+        return np.trapz(power[indices], freqs[indices])
+
+    @staticmethod
+    def _spectral_edge_freq(freqs, power, percent=95):
+        total_power = np.trapz(power, freqs)
+        target_power = total_power * percent/100
+        cumulative_power = np.cumsum(power) * (freqs[1] - freqs[0])
+        idx = np.where(cumulative_power >= target_power)[0][0]
+        return freqs[idx]
+    
+    @staticmethod
+    def _spectral_entropy(power):
+        power = power[power > 0]  # Remove zero values
+        power_normalized = power / np.sum(power)
+        entropy = -np.sum(power_normalized * np.log2(power_normalized+1e-10))
+        return entropy
+
+    @staticmethod
+    def _spectral_flatness(power):
+        geometric_mean = np.exp(np.mean(np.log(power + 1e-10)))
+        arithmetic_mean = np.mean(power)
+        return geometric_mean / arithmetic_mean
+
+    @staticmethod
+    def _median_power(freqs, power):
+        # Calculate the median frequency
+        cumulative_power = np.cumsum(power) * (freqs[1] - freqs[0])
+        median_freq_idx = np.where(cumulative_power >= power/2)[0][0]
+        return freqs[median_freq_idx]
+    
     def _smoothing(self, TimeSerie: ndarray) -> ndarray:
         # Default Neurokit smoothing (low-pass filtering)
         return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate, 
@@ -106,23 +150,82 @@ class ECGxtract():
 
     def _trimming(self, TimeSerie: ndarray) -> ndarray:
         # Trim ECG between the first and last R-peaks
-        peaks, _ = nk.ecg_peaks(TimeSerie, sampling_rate=self.sampling_rate)
+        _, peaks = nk.ecg_peaks(TimeSerie, sampling_rate=self.sampling_rate)
         peak_indices = peaks['ECG_R_Peaks']
         return TimeSerie[peak_indices[0]:peak_indices[-1]]
 
+    def _peak_features(self, signal: ndarray):
+        pass
+
     def _wavelet_features(self, signal: ndarray):
         # Continuous Wavelet Transform (CWT) based features
-        coefs, freqs = nk.signal_cwt(signal, sampling_rate=self.sampling_rate)
-        re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9]+)', re.IGNORECASE)
+        psd_chars = nk.signal_psd(signal, sampling_rate=self.sampling_rate, method='welch').values
+        FREQS = psd_chars[:,0]
+        POWER = psd_chars[:,1]
 
-        wvc = wavelets.extract_wavelet_features(signal, wavelet='db4',
+        # frequency of maximum power
+        dominant_frequency = FREQS[np.argmax(POWER)]
+        # Median frequency, frequency that divides the cumulative power spectrum in two equal parts 
+        median_freq = self._median_power(FREQS, POWER)
+        
+        p_wave_band_power = self._band_power(FREQS, POWER, *self.p_wave_band) # delta
+        qrs_complex_band_power = self._band_power(FREQS, POWER, *self.qrs_complex_band) # theta
+        t_wave_band_power = self._band_power(FREQS, POWER, *self.t_wave_band) # alpha
+        baseline_band_power = self._band_power(FREQS, POWER, *self.baseline_band) # beta
+        mains_noise_band_power = self._band_power(FREQS, POWER, *self.mains_noise_band) # gamma
+        noise_band_power = self._band_power(FREQS, POWER, *self.noise_band) # noise
+        lf_power = self._band_power(FREQS, POWER, *self.low_freq_band) # low frequency
+        hf_power = self._band_power(FREQS, POWER, *self.high_freq_band) # high frequency
+        total_power = np.trapz(POWER, FREQS) # total power
+
+        # ratio of low frequency to high frequency power
+        lf_hf_ratio = lf_power / hf_power
+        # ratio of low frequency to total power
+        lf_total_ratio = lf_power / total_power
+        qrs_noise_ratio = qrs_complex_band_power / noise_band_power
+
+        #######
+        _spectral_edge_freq = self._spectral_edge_freq(FREQS, POWER)
+
+        #######
+        _spectral_entropy = self._spectral_entropy(POWER)
+
+        #######
+        _spectral_flatness = self._spectral_flatness(POWER)
+
+        #######
+        spectral_centroid = np.sum(FREQS * POWER) / np.sum(POWER)
+
+        psd_features = {
+            'dominant_frequency': dominant_frequency,
+            'median_freq': median_freq,
+            'p_wave_band_power': p_wave_band_power,
+            'qrs_complex_band_power': qrs_complex_band_power,
+            't_wave_band_power': t_wave_band_power,
+            'baseline_band_power': baseline_band_power,
+            'main_noise_band_power': mains_noise_band_power,
+            'noise_band_power': noise_band_power,
+            'lf_power': lf_power, 
+            'hf_power': hf_power,
+            'lf_hf_ratio': lf_hf_ratio,
+            'lf_total_ratio': lf_total_ratio,
+            'qrs_noise_ratio': qrs_noise_ratio,
+            'spectral_edge_freq': _spectral_edge_freq,
+            'spectral_entropy': _spectral_entropy,
+            'spectral_flatness': _spectral_flatness,
+            'spectral_centroid': spectral_centroid
+        }
+        ################################
+        wvc_features = wavelets.extract_wavelet_features(signal, wavelet='db4',
                                                 level=3, num_features=6)
-        fcs = extractor.extract_fft_features(signal, num_features=8,
+        fcs_features = extractor.extract_fft_features(signal, num_features=8,
                                              max_frequency=40)
+        
+        psd_v = np.array(list(psd_features.values()))
+        wvc_v = np.array(list(wvc_features.values()))
+        fcs_v = np.array(list(fcs_features.values()))
 
-        return np.concat([coefs.mean(axis=1),
-                          wvc,
-                          fcs])
+        return np.concatenate([psd_v, wvc_v, fcs_v])
 
     def _extractor_features(self, signal: ndarray):
         features = []
@@ -140,8 +243,8 @@ class ECGxtract():
     def _ecg_specific_features(self, signal: ndarray):
         # Extract ECG-specific features: RR intervals, QRS features
         try:
-            signals, info = nk.ecg_process(signal, sampling_rate=self.sampling_rate)
-            hr_features = nk.ecg_intervalrelated(info)
+            signals, _ = nk.ecg_process(signal, sampling_rate=self.sampling_rate)
+            hr_features = nk.ecg_intervalrelated(signals)
             return hr_features.values.flatten()
         except Exception:
             return np.array([])
@@ -153,9 +256,16 @@ class ECGxtract():
         if self.trimming:
             TimeSerie = self._trimming(TimeSerie)
 
-        wavelet_feats = self._wavelet_features(TimeSerie)
-        extractor_feats = self._extractor_features(TimeSerie)
-        ecg_feats = self._ecg_specific_features(TimeSerie)
+        wavelet_feats = np.array([])
+        extractor_feats = np.array([])
+        ecg_feats = np.array([])
+        # Extract features based on the selected methods
+        if 'wavelets' in self.extractors:
+            wavelet_feats = self._wavelet_features(TimeSerie)
+        if 'extractor' in self.extractors:
+            extractor_feats = self._extractor_features(TimeSerie)
+        if 'ecgspecific' in self.extractors:
+            ecg_feats = self._ecg_specific_features(TimeSerie)
 
         # Concatenate all features
         return concatenate([wavelet_feats, extractor_feats, ecg_feats])
@@ -182,17 +292,46 @@ class ECGxtract():
             extracted_features.append(feats)
 
         return extracted_features
+    
+    def extract_from_dict(self, TimeSeries: Dict, 
+                          SignalCol: str='signal',
+                          FsCol: str='fs') -> Dict[str, ndarray]:
+        extracted_features = {}
+        for key, ts in tqdm(TimeSeries.items()):
+            self.sampling_rate = ts[FsCol]
+            if ts[SignalCol].ndim == 1:
+                feats = self._extract_features_for_single_channel(ts[SignalCol].T.numpy())
+            elif ts[SignalCol].ndim == 2:
+                feats = self._extract_single_multichannel(ts[SignalCol].T.numpy())
+            else:
+                raise ValueError(f"Unsupported ndarray dimension: {ts[SignalCol].T.ndim}")
+
+            extracted_features[key] = feats
+
+        return extracted_features
+
 
 class ECGDataset(Dataset):
     """
         ECGDataset class for PhysioNet files
     """
+
+    re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z]+)', re.IGNORECASE)
+    re_age = re.compile(r'Age:\s?(\d+)', re.IGNORECASE) 
+    re_sex = re.compile(r'Sex:\s?(\w+)', re.IGNORECASE)
+    re_height = re.compile(r'Height:\s?(\d+)', re.IGNORECASE)
+    re_weight = re.compile(r'Weight:\s?(\d+)', re.IGNORECASE)
+    re_bmi = re.compile(r'BMI:\s?(\d+)', re.IGNORECASE)
+    re_history = re.compile(r'Hx:\s?(\w+)', re.IGNORECASE)
+    re_meds = re.compile(r'Rx:\s?(\w+)', re.IGNORECASE)
+
     def __init__(self,
         df,
         label_binarizer,
         is_train=True,
         supervised=True,
         extract_label=True,
+        extract_metadata=True,
         config=None,
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
@@ -227,6 +366,7 @@ class ECGDataset(Dataset):
         self.augmentations = augmentations
         self.preprocessing = preprocessing
         self.extract_label = extract_label
+        self.extract_metadata = extract_metadata
 
     def __len__(self):
         return len(self.file_list)
@@ -242,23 +382,41 @@ class ECGDataset(Dataset):
         if isinstance(source, str) and source.endswith('.npy'):
             signal = np.load(source)
             comment = None  # No WFDB record available
+            self.format = 'npy'
+            self.bands = None
+            self.fs = None
+            raise UserWarning("Be aware. NPY format does not contain metadata.")
         elif isinstance(source, str) and source.endswith('.h5'):
             with h5py.File(source, 'r') as f:
                 signal = f['ecg'][:]  # or the correct key
             comment = None  # No WFDB record available
+            self.format = 'h5'
+            self.bands = None
+            self.fs = None
+            raise UserWarning("HDF5 format is not fully implemented yet. Metadata not yet parsed")
         elif isinstance(source, str) and os.path.isdir(source):
             # Load and stack individual lead files (e.g. lead_1.npy, lead_2.npy, ...)
+            # TODO: this should be more flexible to handle different lead names
             leads = []
+            lead_names = []
             for i in range(self.config.LEADS):
-                lead_file = os.path.join(source, f'lead_{i}.npy')
+                bnd_name = f'lead_{i}'
+                lead_file = os.path.join(source, f'{bnd_name}.npy')
                 leads.append(np.load(lead_file))
+                lead_names.append(bnd_name)
             signal = np.stack(leads, axis=0)
             comment = None  # No WFDB record available
+            self.format = 'npy'
+            self.fs = None
+            self.bands = lead_names
+            raise UserWarning("Be aware. NPY format does not contain metadata.")
         elif isinstance(source, str) and source.endswith('.hea'):
             record = wfdb.rdrecord(source.strip('.hea'))
             self.fs = record.fs
+            self.bands = record.sig_name
             signal = record.p_signal.T
             comment = ",".join(record.__dict__['comments'])
+            self.format = 'hea'
         else:
             raise ValueError(f"Unsupported input source: {source}")
 
@@ -473,19 +631,18 @@ class ECGDataset(Dataset):
         # resampler: Resample to a standard sampling rate
         if 'resampler' in self.preprocessing:
             signal = self._standardize_sampling_rate(signal)
-        # standardscaler: Standardize
-        if 'standardscaler' in self.preprocessing:
-            signal = self._standardize_signal(signal)
+        # standardscaler: Standardizesignal
         # truncate: Standardize signal length
         if 'truncate' in self.preprocessing:
             signal = self._standardize_signal_length(signal)
         return signal
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
             signal, record = self._load_signal_from_source(file_path)
             label = None
+            metadata = None
 
             if len(self.preprocessing) > 0:
                 signal = self.preprocess_signal(signal)
@@ -493,22 +650,74 @@ class ECGDataset(Dataset):
             if len(self.augmentations) > 0:
                 signal = self.augment_signal(signal)
 
-            if self.extract_label and (record is not None):
-                try:
-                    label = re.findall(re_diagnosis, record)[0][1]
-                except:
-                    label = None
+            if record is not None:
+                if self.extract_label:
+                    try:
+                        label = re.findall(self.re_diagnosis, record)[0][1]
+                    except:
+                        label = None
 
-            # Convert labels
-            if self.supervised and not self.extract_label:
-                label = torch.tensor(
-                    self.label_binarizer.transform([label])[0],
-                    dtype=torch.float32
-                )
+                if self.extract_metadata:
+                    try:
+                        age  = int(re.findall(self.re_age, record)[0])
+                    except:
+                        age = None
+                    
+                    try:
+                        sex = re.findall(self.re_sex, record)[0]
+                    except:
+                        sex = None
 
-            return signal, label, file_path
+                    try:
+                        height = int(re.findall(self.re_height, record)[0])
+                    except:
+                        height = None
+
+                    try:
+                        weight = int(re.findall(self.re_weight, record)[0])
+                    except:
+                        weight = None
+                    
+                    try:
+                        bmi = int(re.findall(self.re_bmi, record)[0])
+                    except:
+                        bmi = None
+
+                    try:
+                        meds = re.findall(self.re_meds, record)[0]
+                    except:
+                        meds = None
+
+                    try:
+                        history = re.findall(self.re_history, record)[0]
+                    except:
+                        history = None
+
+                    metadata = {
+                        'age': age,
+                        'sex': sex,
+                        'height': height,
+                        'weight': weight,
+                        'bmi': bmi,
+                        'meds': meds,
+                        'history': history,
+                        'fs': self.fs,
+                        'bands': self.bands
+                    }
+                # Convert labels
+                if self.supervised and not self.extract_label:
+                    label = torch.tensor(
+                        self.label_binarizer.transform([label])[0],
+                        dtype=torch.float32
+                    )
+            else:
+                # If no record, set metadata to None
+                metadata = None
+
+
+            return file_path, idx, signal, label, metadata
         except Exception as e:
             print(f"Error processing record {idx}: {e}")
             signal = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH))
             label = torch.zeros(len(self.label_binarizer.classes_))
-            return signal, label, idx
+            return file_path, idx, signal, label, None
