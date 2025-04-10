@@ -95,19 +95,19 @@ class ECGxtract():
                  sampling_rate: int = 1000,
                  smoothing: bool = True,
                  trimming: bool = True,
-                 extractor: Literal['catch22', 'tsfresh', 'both'] = 'catch22',
+                 extractor_type: Literal['catch22', 'tsfresh', 'both'] = 'catch22',
                  aggregation: Literal['concatenate'] = 'concatenate',
-                 extractors: List[Literal['extractor', 'wavelets', 'ecgspecific']] = ['wavelets'],
+                 extractor_groups: List[Literal['extractor', 'wavelets', 'ecgspecific']] = ['wavelets'],
                  trimming_kwargs: Dict = {},
                  smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3}):
         self.sampling_rate = sampling_rate
         self.smoothing = smoothing
         self.trimming = trimming
-        self.extractor = extractor
+        self.extractor_type = extractor_type
         self.aggregation = aggregation
         self.trimming_kwargs = trimming_kwargs
         self.smoothing_kwargs = smoothing_kwargs
-        self.extractors = extractors
+        self.extractor_groups = extractor_groups
 
     @staticmethod
     def _band_power(freqs, power, low, high):
@@ -229,13 +229,20 @@ class ECGxtract():
 
     def _extractor_features(self, signal: ndarray):
         features = []
-        if self.extractor in ['catch22', 'both']:
+        if self.extractor_type in ['catch22', 'both']:
             c22_features = catch22_all(signal)['values']
             features.extend(c22_features)
 
-        if self.extractor in ['tsfresh', 'both']:
-            tsfresh_df = pd.DataFrame({'signal': signal})
-            tsfresh_features = extract_features(tsfresh_df, column_id=None, disable_progressbar=True).values.flatten()
+        if self.extractor_type in ['tsfresh', 'both']:
+            tsfresh_df = pd.DataFrame({
+                                       'id': np.zeros(len(signal)),
+                                       'time': np.arange(len(signal)), 
+                                       'signal': signal})
+            tsfresh_features = extract_features(tsfresh_df, 
+                                                column_value='signal', 
+                                                column_sort='time',
+                                                column_id='id',
+                                                disable_progressbar=True).values.flatten()
             features.extend(tsfresh_features)
 
         return np.array(features)
@@ -260,11 +267,11 @@ class ECGxtract():
         extractor_feats = np.array([])
         ecg_feats = np.array([])
         # Extract features based on the selected methods
-        if 'wavelets' in self.extractors:
+        if 'wavelets' in self.extractor_groups:
             wavelet_feats = self._wavelet_features(TimeSerie)
-        if 'extractor' in self.extractors:
+        if 'extractor' in self.extractor_groups:
             extractor_feats = self._extractor_features(TimeSerie)
-        if 'ecgspecific' in self.extractors:
+        if 'ecgspecific' in self.extractor_groups:
             ecg_feats = self._ecg_specific_features(TimeSerie)
 
         # Concatenate all features
