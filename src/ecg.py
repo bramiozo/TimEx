@@ -2,9 +2,11 @@
 from typing import Literal, Dict, List, Annotated, Optional, Sequence
 from numpy import ndarray, concatenate
 import numpy as np
+
 import neurokit2 as nk
 from pycatch22 import catch22_all
 from tsfresh.feature_extraction import extract_features
+from tsfeatures import pacf_features, acf_features, stl_features, hurst
 import pandas as pd
 import torch
 import os
@@ -12,7 +14,7 @@ import sys
 import gc
 import time
 import wfdb
-from wfdb.processing import resample_sig
+from wfdb.processing import resample_sig # should be default to normalize fs
 import random
 import numpy as np
 import pandas as pd
@@ -92,12 +94,12 @@ class ECGxtract():
     noise_band = (40, 100)     # noise
 
     def __init__(self,
-                 sampling_rate: int = 1000,
+                 sampling_rate: int = 500,                 
                  smoothing: bool = True,
                  trimming: bool = True,
                  extractor_type: Literal['catch22', 'tsfresh', 'both'] = 'catch22',
                  aggregation: Literal['concatenate'] = 'concatenate',
-                 extractor_groups: List[Literal['extractor', 'wavelets', 'ecgspecific']] = ['wavelets'],
+                 extractor_groups: List[Literal['extractor', 'wavelets', 'ecgspecific', 'acf']] = ['wavelets'],
                  trimming_kwargs: Dict = {},
                  smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3}):
         self.sampling_rate = sampling_rate
@@ -108,6 +110,23 @@ class ECGxtract():
         self.trimming_kwargs = trimming_kwargs
         self.smoothing_kwargs = smoothing_kwargs
         self.extractor_groups = extractor_groups
+        self.feature_names = []
+
+    @staticmethod
+    def sanity_check(signal: ndarray) -> bool:
+        """
+        Perform a sanity check on the ECG signal.
+        Check if the signal is not empty and contains valid values.
+        """
+        if signal is None or len(signal) == 0:
+            return False
+        if np.any(np.isnan(signal)) or np.any(np.isinf(signal)):
+            return False
+        if np.all(signal == 0):
+            return False
+        if np.std(signal) == 0:
+            return False
+        return True
 
     @staticmethod
     def _band_power(freqs, power, low, high):
@@ -116,31 +135,133 @@ class ECGxtract():
         return np.trapz(power[indices], freqs[indices])
 
     @staticmethod
-    def _spectral_edge_freq(freqs, power, percent=95):
+    def spectral_edge_freq(freqs, power, percent=95):
+        """
+        Calculate the spectral edge frequency (frequency below which percent% of total power is contained).
+        
+        Parameters:
+        -----------
+        freqs : array-like
+            Frequency values
+        power : array-like
+            Power spectrum values corresponding to freqs
+        percent : float
+            Percentage of power (0-100) for which to find the edge frequency
+            
+        Returns:
+        --------
+        float
+            Spectral edge frequency
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError("Percent must be between 0 and 100")
+            
+        # Calculate total power using trapezoidal rule
         total_power = np.trapz(power, freqs)
+        
+        # Target power
         target_power = total_power * percent/100
-        cumulative_power = np.cumsum(power) * (freqs[1] - freqs[0])
-        idx = np.where(cumulative_power >= target_power)[0][0]
+        
+        # Calculate cumulative power using the same integration method
+        cum_power = np.zeros_like(power)
+        for i in range(len(freqs)):
+            cum_power[i] = np.trapz(power[:i+1], freqs[:i+1])
+        
+        # Find where cumulative power exceeds target
+        idx_exceeds = np.where(cum_power >= target_power)[0]
+        
+        if len(idx_exceeds) == 0:
+            return freqs[-1]  # Return the highest frequency if target not reached
+        
+        idx = idx_exceeds[0]
+
+            # Interpolate for more accurate result (optional)
+        if idx > 0 and cum_power[idx] > target_power:
+            # Linear interpolation between points
+            x0, x1 = freqs[idx-1], freqs[idx]
+            y0, y1 = cum_power[idx-1], cum_power[idx]
+            return x0 + (x1 - x0) * (target_power - y0) / (y1 - y0)
         return freqs[idx]
     
     @staticmethod
-    def _spectral_entropy(power):
-        power = power[power > 0]  # Remove zero values
-        power_normalized = power / np.sum(power)
-        entropy = -np.sum(power_normalized * np.log2(power_normalized+1e-10))
+    def spectral_entropy(power):
+        """
+        Calculate the spectral entropy of a power spectrum.
+        
+        Parameters:
+        -----------
+        power : array-like
+            Power spectrum values
+            
+        Returns:
+        --------
+        float
+            Spectral entropy value
+        """
+        # Add small constant to avoid log(0)
+        eps = 1e-10
+        # Normalize power spectrum
+        power_normalized = power / (np.sum(power) + eps)
+        # Calculate entropy
+        entropy = -np.sum(power_normalized * np.log2(power_normalized + eps))
         return entropy
 
     @staticmethod
-    def _spectral_flatness(power):
-        geometric_mean = np.exp(np.mean(np.log(power + 1e-10)))
-        arithmetic_mean = np.mean(power)
+    def spectral_flatness(power):
+        """
+        Calculate the spectral flatness (Wiener entropy) of a power spectrum.
+        
+        Parameters:
+        -----------
+        power : array-like
+            Power spectrum values
+            
+        Returns:
+        --------
+        float
+            Spectral flatness value between 0 and 1
+        """
+        # Ensure all values are positive
+        eps = 1e-10
+        power_positive = np.maximum(power, eps)
+        
+        # Calculate geometric mean
+        geometric_mean = np.exp(np.mean(np.log(power_positive)))
+        
+        # Calculate arithmetic mean
+        arithmetic_mean = np.mean(power_positive)
+        
+        if arithmetic_mean == 0:
+            return 0
+        
         return geometric_mean / arithmetic_mean
 
     @staticmethod
     def _median_power(freqs, power):
-        # Calculate the median frequency
+        """
+        Calculate the median power frequency (frequency that divides the power spectrum in half).
+        
+        Parameters:
+        -----------
+        freqs : array-like
+            Frequency values
+        power : array-like
+            Power spectrum values corresponding to freqs
+            
+        Returns:
+        --------
+        float
+            Median power frequency
+        """
+        # Calculate the total power
+        total_power = np.sum(power) * (freqs[1] - freqs[0])
+        
+        # Calculate the cumulative power
         cumulative_power = np.cumsum(power) * (freqs[1] - freqs[0])
-        median_freq_idx = np.where(cumulative_power >= power/2)[0][0]
+        
+        # Find the frequency where cumulative power reaches half of total power
+        median_freq_idx = np.argmin(np.abs(cumulative_power - (total_power / 2)))
+        
         return freqs[median_freq_idx]
     
     def _smoothing(self, TimeSerie: ndarray) -> ndarray:
@@ -148,16 +269,57 @@ class ECGxtract():
         return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate, 
                                 **self.smoothing_kwargs)
 
-    def _trimming(self, TimeSerie: ndarray) -> ndarray:
+
+    def _standardize_sampling_rate(self, signal):
+        signal_resampled, _ = resample_sig(signal,
+                                           self.current_sampling_rate, 
+                                           self.sampling_rate)
+        return signal_resampled
+    
+    def _trimming(self, TimeSerie: ndarray, max_trim_factor=0.2) -> ndarray:
         # Trim ECG between the first and last R-peaks
         _, peaks = nk.ecg_peaks(TimeSerie, sampling_rate=self.sampling_rate)
         peak_indices = peaks['ECG_R_Peaks']
+
+        if peak_indices[-1]-peak_indices[0] < len(TimeSerie) * max_trim_factor:
+            # If the distance is too small, return the original signal
+            print("The distance between the first and last R-peaks is too small." \
+            " Returning the original signal.")
+            return TimeSerie
+
         return TimeSerie[peak_indices[0]:peak_indices[-1]]
 
-    def _peak_features(self, signal: ndarray):
+    def _peak_features(self, signal: ndarray, channel: int):
         pass
 
-    def _wavelet_features(self, signal: ndarray):
+
+    def _model_features(self, signal: ndarray, channel: int):
+        # Extract features using a pre-trained autoencoder
+        pass
+
+    def _reg_features(self, signal: ndarray, channel: int):
+        _acf_features = acf_features(signal, freq=self.sampling_rate)
+        _pacf_features = pacf_features(signal, freq=self.sampling_rate)
+        #_stl_features = stl_features(signal, freq=self.sampling_rate)
+        #_hurst = hurst(signal, freq=self.sampling_rate)
+
+        acf_v = np.array(list(_acf_features.values()))
+        pacf_v = np.array(list(_pacf_features.values()))
+        #stl_v = np.array(list(_stl_features.values()))
+        #hurst_v = np.array(list(_hurst.values()))
+        
+        # concat names
+        acf_names = list(_acf_features.keys())
+        pacf_names = list(_pacf_features.keys())
+        #stl_names = list(_stl_features.keys())
+        #hurst_names = list(_hurst.keys())
+        self.feature_names += [f'CHANNEL_{channel}_{n}' for n in acf_names] + \
+                              [f'CHANNEL_{channel}_{n}' for n in pacf_names] 
+
+        return np.concatenate([acf_v, pacf_v])
+
+
+    def _wavelet_features(self, signal: ndarray, channel: int):
         # Continuous Wavelet Transform (CWT) based features
         psd_chars = nk.signal_psd(signal, sampling_rate=self.sampling_rate, method='welch').values
         FREQS = psd_chars[:,0]
@@ -225,62 +387,106 @@ class ECGxtract():
         wvc_v = np.array(list(wvc_features.values()))
         fcs_v = np.array(list(fcs_features.values()))
 
+        # Concatenate all names
+        psd_names = list(psd_features.keys())
+        wvc_names = list(wvc_features.keys())
+        fcs_names = list(fcs_features.keys())
+        self.feature_names += [f'CHANNEL_{channel}_{n}' for n in psd_names] + \
+                              [f'CHANNEL_{channel}_{n}' for n in wvc_names] + \
+                              [f'CHANNEL_{channel}_{n}' for n in fcs_names]
+
         return np.concatenate([psd_v, wvc_v, fcs_v])
 
-    def _extractor_features(self, signal: ndarray):
+    def _extractor_features(self, signal: ndarray, channel: int):
         features = []
         if self.extractor_type in ['catch22', 'both']:
-            c22_features = catch22_all(signal)['values']
+            c22_features_df = catch22_all(signal)
+            c22_features = c22_features_df['values']
             features.extend(c22_features)
+            self.feature_names += list(c22_features_df['names'])
 
         if self.extractor_type in ['tsfresh', 'both']:
             tsfresh_df = pd.DataFrame({
                                        'id': np.zeros(len(signal)),
                                        'time': np.arange(len(signal)), 
                                        'signal': signal})
-            tsfresh_features = extract_features(tsfresh_df, 
+            tsfresh_features_df = extract_features(tsfresh_df, 
                                                 column_value='signal', 
                                                 column_sort='time',
                                                 column_id='id',
-                                                disable_progressbar=True).values.flatten()
+                                                disable_progressbar=True)
+            tsfresh_features = tsfresh_features_df.values.flatten()
             features.extend(tsfresh_features)
+            self.feature_names += [f'CHANNEL_{channel}_{n}' 
+                                   for n in  list(tsfresh_features_df.columns)]
 
         return np.array(features)
 
-    def _ecg_specific_features(self, signal: ndarray):
+    def _ecg_specific_features(self, signal: ndarray, channel: int):
         # Extract ECG-specific features: RR intervals, QRS features
         try:
             signals, _ = nk.ecg_process(signal, sampling_rate=self.sampling_rate)
             hr_features = nk.ecg_intervalrelated(signals)
+            self.feature_names += [f'CHANNEL_{channel}_{n}' for n in list(hr_features.columns)]
             return hr_features.values.flatten()
         except Exception:
             return np.array([])
 
-    def _extract_features_for_single_channel(self, TimeSerie: ndarray) -> ndarray:
+    def _extract_features_for_single_channel(self, 
+                                             TimeSerie: ndarray, 
+                                             channel: int) -> ndarray:
+        # check if the signal is not empty
+        # check if any of the features are empty
+
+        if self.current_sampling_rate!=self.sampling_rate:
+            TimeSerie = self._standardize_sampling_rate(TimeSerie)
+        
         if self.smoothing:
             TimeSerie = self._smoothing(TimeSerie)
 
-        if self.trimming:
-            TimeSerie = self._trimming(TimeSerie)
-
+        if len(TimeSerie) == 0:
+            return None
+        
         wavelet_feats = np.array([])
         extractor_feats = np.array([])
         ecg_feats = np.array([])
+        acf_feats = np.array([])
         # Extract features based on the selected methods
         if 'wavelets' in self.extractor_groups:
-            wavelet_feats = self._wavelet_features(TimeSerie)
+            try:
+                wavelet_feats = self._wavelet_features(TimeSerie, channel)
+            except Exception as e:
+                print(f"Error extracting wavelet features: {e}\n TimeSerie: {TimeSerie}")
+                raise ValueError("Wavelet feature extraction failed.")
         if 'extractor' in self.extractor_groups:
-            extractor_feats = self._extractor_features(TimeSerie)
+            try:
+                extractor_feats = self._extractor_features(TimeSerie, channel)
+            except Exception as e:
+                print(f"Error applying extractor: {e}\n TimeSerie: {TimeSerie}")
+                raise ValueError("Extractor feature extraction failed.")
         if 'ecgspecific' in self.extractor_groups:
-            ecg_feats = self._ecg_specific_features(TimeSerie)
-
+            try:
+                ecg_feats = self._ecg_specific_features(TimeSerie, channel)
+            except:
+                print(f"Error applying ecg_specific: {e}\n TimeSerie: {TimeSerie}")
+                raise ValueError("ECG-specific feature extraction failed.")
+        if 'acf' in self.extractor_groups:
+            try:
+                acf_feats = self._reg_features(TimeSerie, channel)
+            except Exception as e:
+                print(f"Error applying acf: {e}\n TimeSerie: {TimeSerie}")
+                raise ValueError("ACF feature extraction failed.")
+ 
         # Concatenate all features
-        return concatenate([wavelet_feats, extractor_feats, ecg_feats])
+        return concatenate([wavelet_feats, 
+                            extractor_feats, 
+                            ecg_feats, 
+                            acf_feats])
 
     def _extract_single_multichannel(self, TimeSeries: NDArray2D) -> ndarray:
         assert TimeSeries.ndim == 2
 
-        features = [self._extract_features_for_single_channel(TimeSeries[:, ch]) 
+        features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch) 
                     for ch in range(TimeSeries.shape[1])]
 
         # Concatenate all channel features
@@ -305,17 +511,30 @@ class ECGxtract():
                           FsCol: str='fs') -> Dict[str, ndarray]:
         extracted_features = {}
         for key, ts in tqdm(TimeSeries.items()):
-            self.sampling_rate = ts[FsCol]
+            self.current_sampling_rate = ts[FsCol]
+            self.feature_names = []
             if ts[SignalCol].ndim == 1:
-                feats = self._extract_features_for_single_channel(ts[SignalCol].T.numpy())
+                tsignal = ts[SignalCol].T.numpy()
+                # sanitycheck
+                if self.sanity_check(tsignal):
+                    feats = self._extract_features_for_single_channel(tsignal)
+                else:
+                    print(f"Signal {key} failed sanity check. Skipping.")
+                    continue
             elif ts[SignalCol].ndim == 2:
-                feats = self._extract_single_multichannel(ts[SignalCol].T.numpy())
+                tsignal = ts[SignalCol].T.numpy()
+                if self.sanity_check(tsignal):
+                    feats = self._extract_single_multichannel(tsignal)
+                else:
+                    print(f"Signal {key} failed sanity check. Skipping.")
+                    continue
             else:
                 raise ValueError(f"Unsupported ndarray dimension: {ts[SignalCol].T.ndim}")
 
-            extracted_features[key] = feats
+            extracted_features[key] = dict(zip(self.feature_names, feats))
 
         return extracted_features
+
 
 
 class ECGDataset(Dataset):
@@ -343,7 +562,7 @@ class ECGDataset(Dataset):
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
                                      'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
-                                     =['bandpass']
+                                     = ['bandpass', 'resampler']
         ):
 
         if isinstance(df, pd.DataFrame):
@@ -468,7 +687,8 @@ class ECGDataset(Dataset):
         return signal
 
     def _standardize_sampling_rate(self, signal):
-        signal_resampled, _ = resample_sig(signal.numpy(), self.fs, self.config.SAMPLING_RATE)
+        signal_resampled, _ = resample_sig(signal.numpy(),
+                                            self.fs, self.config.SAMPLING_RATE)
         signal = torch.tensor(signal_resampled)
         return signal
 
