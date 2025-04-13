@@ -556,17 +556,17 @@ class ECGxtract():
                 TimeSerie = self._standardize_sampling_rate(TimeSerie)
             except Exception as e:
                 print(f"Error resampling: {e}\n TimeSerie: {TimeSerie}")
-                return None
+                return {}
         
         if self.smoothing:
             try:
                 TimeSerie = self._smoothing(TimeSerie)
             except Exception as e:
                 print(f"Error applying smoothing: {e}\n TimeSerie: {TimeSerie}")
-                return None
+                return {}
 
         if len(TimeSerie) == 0:
-            return None
+            return {}
         
         wavelet_feats = {}
         extractor_feats = {}
