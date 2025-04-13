@@ -122,7 +122,7 @@ def numba_sanity_check_1d(signal: ndarray) -> bool:
     
     return True
 
-def numba_sanity_check(signal: ndarray, num_check: int=1000) -> bool:
+def numba_sanity_check(signal: ndarray, num_check: int=10_000) -> bool:
     """
     Wrapper function to handle different array types and shapes.
     """
@@ -551,11 +551,19 @@ class ECGxtract():
         # check if any of the features are empty
 
         if self.current_sampling_rate!=self.sampling_rate:
-            print(f"Resampling signal...{self.current_sampling_rate} to {self.sampling_rate}")
-            TimeSerie = self._standardize_sampling_rate(TimeSerie)
+            #print(f"Resampling signal...{self.current_sampling_rate} to {self.sampling_rate}")
+            try:
+                TimeSerie = self._standardize_sampling_rate(TimeSerie)
+            except Exception as e:
+                print(f"Error resampling: {e}\n TimeSerie: {TimeSerie}")
+                return None
         
         if self.smoothing:
-            TimeSerie = self._smoothing(TimeSerie)
+            try:
+                TimeSerie = self._smoothing(TimeSerie)
+            except Exception as e:
+                print(f"Error applying smoothing: {e}\n TimeSerie: {TimeSerie}")
+                return None
 
         if len(TimeSerie) == 0:
             return None
