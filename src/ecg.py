@@ -680,7 +680,7 @@ class ECGDataset(Dataset):
         ECGDataset class for PhysioNet files
     """
 
-    re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z]+)', re.IGNORECASE)
+    re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z,]+)', re.IGNORECASE)
     re_age = re.compile(r'Age:\s?(\d+)', re.IGNORECASE) 
     re_sex = re.compile(r'Sex:\s?(\w+)', re.IGNORECASE)
     re_height = re.compile(r'Height:\s?(\d+)', re.IGNORECASE)
@@ -779,7 +779,7 @@ class ECGDataset(Dataset):
             self.fs = record.fs
             self.bands = record.sig_name
             signal = record.p_signal.T
-            comment = ",".join(record.__dict__['comments'])
+            comment = "|".join(record.__dict__['comments'])
             self.format = 'hea'
         else:
             raise ValueError(f"Unsupported input source: {source}")
