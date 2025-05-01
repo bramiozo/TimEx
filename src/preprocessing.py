@@ -5,9 +5,9 @@
 from scipy import signal
 from scipy import interpolate
 from scipy import ndimage
-from scipy.stats import skew, kurtosis
-from scipy.fft import rfft, rfftfreq
-from scipy.signal import cwt, ricker
+#from scipy.stats import skew, kurtosis
+#from scipy.fft import rfft, rfftfreq
+#from scipy.signal import cwt, ricker
 
 import numpy as np
 import tsfresh
