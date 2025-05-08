@@ -132,7 +132,7 @@ def get_smoothed_rolling_mean(ts_dict: dict,
         else:
             r = range(_df.shape[0])
         _df.iloc[r, 2] = _df[val_col].rolling(window=window,
-                                            min_periods=1).mean().values[r]
+                                              min_periods=0).mean().values[r]
         
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
