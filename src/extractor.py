@@ -2721,30 +2721,101 @@ def extract_peaks_and_valleys(y, N=10):
 
     return feature_dict
 
-def extract_fft_features(y, x=None,  num_features = 5, max_frequency = 40):
-  # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
-  y= y -np.mean(y)
-  # Perform the Fourier Transform
-  Y = np.fft.fft(y)
-  # Calculate the frequency bins
-  if x is None:
-    x = np.linspace(0,len(y))
-  frequencies = np.fft.fftfreq(len(x), d=(x[1] - x[0]) / (2*np.pi))
-  Y_abs = 2*np.abs(Y) / len(x)
-  Y_abs[Y_abs < 1e-6] = 0
-  relevant_frequencies = np.where((frequencies>0) & (frequencies<max_frequency))
-  Y_phase = np.angle(Y)[relevant_frequencies]
-  frequencies = frequencies[relevant_frequencies]
-  Y_abs = Y_abs[relevant_frequencies]
-  largest_amplitudes = np.flip(np.argsort(Y_abs))[0:num_features]
-  top_5_amplitude = Y_abs[largest_amplitudes]
-  top_5_frequencies = frequencies[largest_amplitudes]
-  top_5_phases = Y_phase[largest_amplitudes]
-  fft_features = top_5_amplitude.tolist()+top_5_frequencies.tolist()+top_5_phases.tolist()
-  amp_keys = ['Amplitude '+str(i) for i in range(1,num_features+1)]
-  freq_keys = ['Frequency '+str(i) for i in range(1,num_features+1)]
-  phase_keys = ['Phase '+str(i) for i in range(1,num_features+1)]
-  fft_keys = amp_keys+freq_keys+phase_keys
-  fft_dict = {fft_keys[i]:fft_features[i] for i in range(len(fft_keys))}
-  return fft_dict
+def extract_fft_features(y, x=None, num_features=5, max_frequency=40):
+    """
+    Extract frequency domain features from a time series signal using FFT.
+    
+    Parameters:
+    -----------
+    y : array-like
+        The input signal time series.
+    x : array-like, optional
+        The time points corresponding to y. If None, equally spaced points are used.
+    num_features : int, default=5
+        Number of top frequency components to extract.
+    max_frequency : float, default=40
+        Maximum frequency (Hz) to consider.
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing the top amplitudes, frequencies, and phases.
+        Keys are 'Amplitude N', 'Frequency N', and 'Phase N' where N is 1 to num_features.
+    
+    Credits:
+    --------
+    Adapted from: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
+    """
+    import numpy as np
+    
+    # Input validation
+    y = np.asarray(y)
+    if len(y) == 0:
+        raise ValueError("Input signal y cannot be empty")
+        
+    # Prepare time series data
+    y_centered = y - np.mean(y)
+    
+    # Handle time points
+    if x is None:
+        x = np.linspace(0, len(y), len(y))
+    else:
+        x = np.asarray(x)
+        if len(x) != len(y):
+            raise ValueError(f"Length of x ({len(x)}) must match length of y ({len(y)})")
+    
+    # Compute FFT
+    Y = np.fft.fft(y_centered)
+    
+    # Calculate frequency bins
+    time_step = (x[1] - x[0]) / (2 * np.pi)
+    frequencies = np.fft.fftfreq(len(y), d=time_step)
+    
+    # Calculate amplitude spectrum
+    amplitudes = 2 * np.abs(Y) / len(y)
+    amplitudes[amplitudes < 1e-6] = 0  # Remove numerical noise
+    
+    # Filter to relevant frequencies
+    relevant_indices = np.where((frequencies > 0) & (frequencies < max_frequency))[0]
+    
+    # Ensure we have enough relevant frequencies
+    if len(relevant_indices) == 0:
+        raise ValueError(f"No frequencies found between 0 and {max_frequency}Hz")
+    
+    # Extract relevant frequency domain information
+    filtered_phases = np.angle(Y)[relevant_indices]
+    filtered_frequencies = frequencies[relevant_indices]
+    filtered_amplitudes = amplitudes[relevant_indices]
+    
+    # Get indices of top frequency components
+    num_components = min(num_features, len(filtered_amplitudes))
+    top_indices = np.flip(np.argsort(filtered_amplitudes))[:num_components]
+    
+    # Extract top components
+    top_amplitudes = filtered_amplitudes[top_indices]
+    top_frequencies = filtered_frequencies[top_indices]
+    top_phases = filtered_phases[top_indices]
+    
+    # Pad with zeros if not enough components found
+    if num_components < num_features:
+        top_amplitudes = np.pad(top_amplitudes, (0, num_features - num_components))
+        top_frequencies = np.pad(top_frequencies, (0, num_features - num_components))
+        top_phases = np.pad(top_phases, (0, num_features - num_components))
+    
+    # Build feature dictionary
+    all_features = (
+        top_amplitudes.tolist() + 
+        top_frequencies.tolist() + 
+        top_phases.tolist()
+    )
+    
+    # Create dictionary keys
+    feature_keys = (
+        [f'Amplitude {i}' for i in range(1, num_features + 1)] +
+        [f'Frequency {i}' for i in range(1, num_features + 1)] +
+        [f'Phase {i}' for i in range(1, num_features + 1)]
+    )
+    
+    # Create and return the feature dictionary
+    return dict(zip(feature_keys, all_features))
 
