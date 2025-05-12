@@ -154,16 +154,8 @@ class ECGSignalProcessor:
           peaks, _ = find_peaks(filtered[i], distance=30, prominence=(0.1))
           dips, _ = find_peaks(-filtered[i], distance=250)
 
-          if peaks[0]<dips[0]:
-            start_point=peaks[0]
-          else:
-            start_point=dips[0]
-
-
-          if peaks[-1]<dips[-1]:
-            end_point=dips[-1]
-          else:
-            end_point=peaks[-1]
+          start_point = min(peaks[0], dips[0])
+          end_point = max(peaks[-1], dips[-1]) 
 
 
           self.trimmed_signal = filtered[i][start_point:end_point]
