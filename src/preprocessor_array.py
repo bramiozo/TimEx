@@ -48,7 +48,7 @@ class ECGSignalProcessor:
         self.filtered_signal2 = None
         self.smoothed = None
         self.detrend = None
-        self_trim_arr = None
+        self.trim_arr = None
         self.peaks = None
         self.dips = None
 
