@@ -1,16 +1,40 @@
 # TimEx
-Repository for extracting time-series features and clusters
+Repository for extracting time-series features and clusters. This library is not meant for end-to-end timeseries-classification.
 
-# **Normalisation**
+# **Standardisation**
 
+```python
 
+from timex import ts_scaler
+
+scaler = ts_scaler(by='id', how='standardisation')
+
+TS_standardised = scaler.fit_transform(TS_data)
+```
 
 # **Interpolation**
 
 
+```python
+
+from timex import ts_interp
+
+interpol = ts_interp(how='mono_cube', unit='days', resolution=1, knots=10, relative=True)
+
+TS_interp = interpol.fit_transform(TS_data)
+```
+
 
 # **Smoothing** 
 
+```python
+
+from timex import ts_smoother
+
+smoother = ts_smoother(unit='days', resolution=1, window=10, how='gaussian')
+
+TS_smoothed = smoother.fit_transform(TS_data)
+```
 
 
 # **Detrending**
@@ -32,7 +56,7 @@ Using features  from
   * wavelet
   * FFT
   * Mann-Kendall
-* Neurokit2
+* Neurokit2 for EEG/ECG preprocessing
  
 *TODO:*  use tsflex to improve performance of feature  extraction.
 
