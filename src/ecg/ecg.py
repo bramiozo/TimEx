@@ -91,12 +91,12 @@ def numba_sanity_check_1d(signal: ndarray) -> bool:
     # Check if empty (length check)
     if len(signal) == 0:
         return False
-    
+
     # Check for NaN or Inf
     for val in signal:
         if np.isnan(val) or np.isinf(val):
             return False
-    
+
     # Check if all zeros
     all_zeros = True
     for val in signal:
@@ -105,21 +105,21 @@ def numba_sanity_check_1d(signal: ndarray) -> bool:
             break
     if all_zeros:
         return False
-    
+
     # Check std == 0 (constant signal)
     mean = 0.0
     for val in signal:
         mean += val
     mean /= len(signal)
-    
+
     var = 0.0
     for val in signal:
         var += (val - mean) ** 2
     var /= len(signal)
-    
+
     if var == 0:
         return False
-    
+
     return True
 
 def numba_sanity_check(signal: ndarray, num_check: int=10_000) -> bool:
@@ -128,7 +128,7 @@ def numba_sanity_check(signal: ndarray, num_check: int=10_000) -> bool:
     """
     # Make sure we have a numpy array
     signal = np.asarray(signal)
-    
+
     # Handle different dimensionality
     if signal.ndim == 1:
         return numba_sanity_check_1d(signal[:num_check])
@@ -141,7 +141,7 @@ def numba_sanity_check(signal: ndarray, num_check: int=10_000) -> bool:
     else:
         raise ValueError(f"Unsupported array dimension: {signal.ndim}. \
                          Only 1D and 2D arrays are supported.")
-    
+
 
 @numba.njit
 def spectral_edge_freq_impl(freqs, power, percent):
@@ -246,7 +246,7 @@ def median_power_impl(freqs, power):
     return freqs[-1]
 
 
-    
+
 class ECGxtract():
     p_wave_band = 0.5, 3      # P-wave components
     qrs_complex_band = (4, 20)   # QRS complex components
@@ -258,7 +258,7 @@ class ECGxtract():
     noise_band = (40, 100)     # noise
 
     def __init__(self,
-                 sampling_rate: int = 500,                 
+                 sampling_rate: int = 500,
                  smoothing: bool = True,
                  trimming: bool = True,
                  sanity_check: bool = True,
@@ -268,6 +268,12 @@ class ECGxtract():
                  extractor_groups: List[Literal['tsfel', 'extractor', 'wavelets', 'ecgspecific', 'acf']] = ['wavelets'],
                  trimming_kwargs: Dict = {},
                  smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3}):
+        """ECGExtract
+
+        This class is meant for feature extraction from ECG signals.
+        The class contains some pre-processing steps such as trimming, smoothing and down/up sampling to 500Hz.
+        """
+
         self.sampling_rate = sampling_rate
         self.smoothing = smoothing
         self.trimming = trimming
@@ -310,17 +316,17 @@ class ECGxtract():
             raise ValueError("freqs and power must have the same length")
 
         return spectral_edge_freq_impl(freqs, power, percent)
-    
+
     @staticmethod
     def _spectral_entropy(power):
         """
         Calculate the spectral entropy of a power spectrum.
-        
+
         Parameters:
         -----------
         power : array-like
             Power spectrum values
-            
+
         Returns:
         --------
         float
@@ -334,12 +340,12 @@ class ECGxtract():
     def _spectral_flatness(power):
         """
         Calculate the spectral flatness (Wiener entropy) of a power spectrum.
-        
+
         Parameters:
         -----------
         power : array-like
             Power spectrum values
-            
+
         Returns:
         --------
         float
@@ -354,14 +360,14 @@ class ECGxtract():
     def _median_power(freqs, power):
         """
         Calculate the median power frequency (frequency that divides the power spectrum in half).
-        
+
         Parameters:
         -----------
         freqs : array-like
             Frequency values
         power : array-like
             Power spectrum values corresponding to freqs
-            
+
         Returns:
         --------
         float
@@ -373,19 +379,19 @@ class ECGxtract():
             raise ValueError("freqs and power must have the same length")
 
         return median_power_impl(freqs, power)
-    
+
     def _smoothing(self, TimeSerie: ndarray) -> ndarray:
         # Default Neurokit smoothing (low-pass filtering)
-        return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate, 
+        return nk.signal_filter(TimeSerie, sampling_rate=self.sampling_rate,
                                 **self.smoothing_kwargs)
 
 
     def _standardize_sampling_rate(self, signal):
         signal_resampled, _ = resample_sig(signal,
-                                           self.current_sampling_rate, 
+                                           self.current_sampling_rate,
                                            self.sampling_rate)
         return signal_resampled
-    
+
     def _trimming(self, TimeSerie: ndarray, max_trim_factor=0.2) -> ndarray:
         # Trim ECG between the first and last R-peaks
         _, peaks = nk.ecg_peaks(TimeSerie, sampling_rate=self.sampling_rate)
@@ -408,7 +414,7 @@ class ECGxtract():
             return None
         res = tsfel.time_series_features_extractor(cfg,
                                          signal,
-                                         fs=self.sampling_rate, 
+                                         fs=self.sampling_rate,
                                          window_size=ws,
                                          verbose=0,
                                          overlap=0.5,
@@ -445,9 +451,9 @@ class ECGxtract():
 
         # frequency of maximum power
         dominant_frequency = FREQS[np.argmax(POWER)]
-        # Median frequency, frequency that divides the cumulative power spectrum in two equal parts 
+        # Median frequency, frequency that divides the cumulative power spectrum in two equal parts
         median_freq = self._median_power(FREQS, POWER)
-        
+
         p_wave_band_power = self._band_power(FREQS, POWER, *self.p_wave_band) # delta
         qrs_complex_band_power = self._band_power(FREQS, POWER, *self.qrs_complex_band) # theta
         t_wave_band_power = self._band_power(FREQS, POWER, *self.t_wave_band) # alpha
@@ -485,7 +491,7 @@ class ECGxtract():
             'baseline_band_power': baseline_band_power,
             'main_noise_band_power': mains_noise_band_power,
             'noise_band_power': noise_band_power,
-            'lf_power': lf_power, 
+            'lf_power': lf_power,
             'hf_power': hf_power,
             'lf_hf_ratio': lf_hf_ratio,
             'lf_total_ratio': lf_total_ratio,
@@ -500,7 +506,7 @@ class ECGxtract():
                                                 level=3, num_features=6)
         fcs_features = extractor.extract_fft_features(signal, num_features=8,
                                              max_frequency=40)
-        
+
         # merge features dicts
         _features = {**psd_features, **wvc_features, **fcs_features}
         # update key names with the channel number
@@ -511,21 +517,21 @@ class ECGxtract():
         _features = {}
         if self.extractor_type in ['catch22', 'both']:
             c22_features_df = catch22_all(signal, catch24=True)
-            c22_features = dict(zip(c22_features_df['names'], 
+            c22_features = dict(zip(c22_features_df['names'],
                                     c22_features_df['values']))
             _features.update(c22_features)
 
         if self.extractor_type in ['tsfresh', 'both']:
             tsfresh_df = pd.DataFrame({
                                        'id': np.zeros(len(signal)),
-                                       'time': np.arange(len(signal)), 
+                                       'time': np.arange(len(signal)),
                                        'signal': signal})
-            tsfresh_features_df = extract_features(tsfresh_df, 
-                                                column_value='signal', 
+            tsfresh_features_df = extract_features(tsfresh_df,
+                                                column_value='signal',
                                                 column_sort='time',
                                                 column_id='id',
                                                 disable_progressbar=True)
-            tsfresh_features = dict(zip(tsfresh_features_df.columns, 
+            tsfresh_features = dict(zip(tsfresh_features_df.columns,
                                         tsfresh_features_df.values.flatten()))
             # Merge features
             _features.update(tsfresh_features)
@@ -544,8 +550,8 @@ class ECGxtract():
         except Exception:
             return None
 
-    def _extract_features_for_single_channel(self, 
-                                             TimeSerie: ndarray, 
+    def _extract_features_for_single_channel(self,
+                                             TimeSerie: ndarray,
                                              channel: int) -> ndarray:
         # check if the signal is not empty
         # check if any of the features are empty
@@ -557,7 +563,7 @@ class ECGxtract():
             except Exception as e:
                 print(f"Error resampling: {e}\n TimeSerie: {TimeSerie}")
                 return {}
-        
+
         if self.smoothing:
             try:
                 TimeSerie = self._smoothing(TimeSerie)
@@ -567,7 +573,7 @@ class ECGxtract():
 
         if len(TimeSerie) == 0:
             return {}
-        
+
         wavelet_feats = {}
         extractor_feats = {}
         ecg_feats = {}
@@ -604,7 +610,7 @@ class ECGxtract():
             except Exception as e:
                 print(f"Error applying tsfel: {e}\n TimeSerie: {TimeSerie}")
                 raise ValueError("TSFEL feature extraction failed.")
- 
+
         _features = {
             **wavelet_feats,
             **extractor_feats,
@@ -617,7 +623,7 @@ class ECGxtract():
     def _extract_single_multichannel(self, TimeSeries: NDArray2D) -> ndarray:
         assert TimeSeries.ndim == 2
 
-        features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch) 
+        features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch)
                     for ch in range(TimeSeries.shape[1])]
 
         # features is a list of dictionaries, merge into on
@@ -639,8 +645,8 @@ class ECGxtract():
             extracted_features.append(feats)
 
         return extracted_features
-    
-    def extract_from_dict(self, TimeSeries: Dict, 
+
+    def extract_from_dict(self, TimeSeries: Dict,
                           SignalCol: str='signal',
                           FsCol: str='fs') -> Dict[str, ndarray]:
         extracted_features = {}
@@ -681,7 +687,7 @@ class ECGDataset(Dataset):
     """
 
     re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z,]+)', re.IGNORECASE)
-    re_age = re.compile(r'Age:\s?(\d+)', re.IGNORECASE) 
+    re_age = re.compile(r'Age:\s?(\d+)', re.IGNORECASE)
     re_sex = re.compile(r'Sex:\s?(\w+)', re.IGNORECASE)
     re_height = re.compile(r'Height:\s?(\d+)', re.IGNORECASE)
     re_weight = re.compile(r'Weight:\s?(\d+)', re.IGNORECASE)
@@ -1027,7 +1033,7 @@ class ECGDataset(Dataset):
                         age  = int(re.findall(self.re_age, record)[0])
                     except:
                         age = None
-                    
+
                     try:
                         sex = re.findall(self.re_sex, record)[0]
                     except:
@@ -1042,7 +1048,7 @@ class ECGDataset(Dataset):
                         weight = int(re.findall(self.re_weight, record)[0])
                     except:
                         weight = None
-                    
+
                     try:
                         bmi = int(re.findall(self.re_bmi, record)[0])
                     except:
