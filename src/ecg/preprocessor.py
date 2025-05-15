@@ -7,10 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1rP69EbxAJ_3BAmg3xgT58TFsOgWi3THZ
 """
 
-pip install wfdb
-
-pip install neurokit2
-
 import wfdb
 import pandas as pd
 import numpy as np
@@ -32,10 +28,22 @@ import seaborn as sns
 from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
 
 
-
-
 class ECGSignalProcessor:
     def __init__(self, filepath, fs=500):
+        """Example
+        processor = ECGSignalProcessor('102511170/102511170')
+        processor.plot_signals()
+        processor.detect_peaks_and_dips()
+
+        processor.apply_bandpass_filter()
+        processor.apply_notch_filter(processor.filtered_signal)
+        processor.apply_savgol_filter(processor.filtered_signal2)
+        processor.apply_detrend(processor.smoothed)
+        processor.trim_signal(processor.detrend)
+        processor.quality_check(processor.trim_arr)
+        """
+
+
         self.filepath = filepath
         self.fs = fs
         self.record = wfdb.rdrecord(filepath)
@@ -133,14 +141,3 @@ class ECGSignalProcessor:
         for sig in trimmed:
           quality = nk.ecg_quality(sig, method= 'zhao2018', approach= 'fuzzy', sampling_rate=self.fs)
           print(quality)
-
-processor = ECGSignalProcessor('102511170/102511170')
-processor.plot_signals()
-processor.detect_peaks_and_dips()
-
-processor.apply_bandpass_filter()
-processor.apply_notch_filter(processor.filtered_signal)
-processor.apply_savgol_filter(processor.filtered_signal2)
-processor.apply_detrend(processor.smoothed)
-processor.trim_signal(processor.detrend)
-processor.quality_check(processor.trim_arr)
