@@ -95,6 +95,10 @@ TSFEL_FEATURES = ['positive_turning', 'negative_turning',
                 'wavelet_energy', 'mfcc',
                 'lpcc']
 
+WAVELET_FEATURES =['custom_wvt_'+t for t in ['mean', 'std', 'max', 'min', 'median', 'energy', 'band_energy1', 'band_energy2', 'band_energy3', 'band_energy4', 
+                        'mean_scale1', 'median_scale1', 'mean_scale2', 'median_scale2', 'mean_scale3', 'median_scale3', 'scale_max', 
+                        'entropy', 'entropy_scale1', 'entropy_scale2', 'entropy_scale3', 'sample_entropy', 'spectral_entropy', 'scale_entropy']]
+
 def time_function(func):
     def wrapper(*args, **kwargs):
         start_time = timer()
@@ -242,7 +246,9 @@ class Extractor:
             (mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend), time_mankendall = \
                         time_function(_mann_kendall_test)(ts_data)
 
-            wavelet_transform_feature, time_wavelet_transform = time_function(_wavelet_transform_feature)(ts_data)
+            wavelet_transform_feature_np, time_wavelet_transform = time_function(extract_cwt_features)(ts_data)
+            wavelet_transform_feature = dict(zip(WAVELET_FEATURES,wavelet_transform_feature_np))
+
             psd_int, time_psdint = time_function(_psd_int)(ts_data, integrator='trapezoidal')
 
             avg_3rd_diff, time_avg3rdDiff = time_function(avg_3rd_order)(ts_data)
@@ -328,7 +334,6 @@ class Extractor:
                 'mann_kendall_slope': mk_slope,
                 'mann_kendall_intercept': mk_intercept,
                 'mann_kendall_trend': mk_trend,
-                'wavelet_transform_feature': wavelet_transform_feature,
                 'psd_int': psd_int,
                 'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum,
                 'avg_3rd_diff': avg_3rd_diff,
@@ -349,6 +354,7 @@ class Extractor:
             res_dict.update(fourcoeffs)
             res_dict.update(wavelet_coeffs)
             res_dict.update(peak_and_valleys)
+            res_dict.update(wavelet_transform_feature)
 
             self.features[_id] = res_dict
         self.duration_dict = {k:v/num_series for k,v in self.duration_dict.items()}
@@ -471,7 +477,7 @@ class AntropyExtractor:
             'sample_entropy': ant.sample_entropy,
             'lziv_complexity': ant.lziv_complexity,
             'num_zerocross': ant.num_zerocross,
-            'hjorth_params': ant.hjorth,
+            'hjorth_params': ant.hjorth_params,
             'petrosian_fd': ant.petrosian_fd,
             'katz_fd': ant.katz_fd,
             'higuchi_fd': ant.higuchi_fd,
@@ -484,9 +490,18 @@ class AntropyExtractor:
                 fun = feature_functions[f]
                 if f == 'hjorth_params':
                     hjorth, time_elapsed = time_function(fun)(ts_data)
-                    res['activity'] = hjorth[0]
-                    res['mobility'] = hjorth[1]
-                    res['complexity'] = hjorth[2]
+                    res['mobility'] = hjorth[0]
+                    res['complexity'] = hjorth[1]
+                elif f == 'svd_entropy':
+                    try:
+                        result, time_elapsed = time_function(fun)(ts_data)
+                        res['svd_entropy'] = result
+                    except:
+                        res['svd_entropy'] = np.nan
+                        time_elapsed = 0
+                elif f == 'spectral_entropy':
+                    result, time_elapsed = time_function(fun)(ts_data, sf=1)
+                    res['spectral_entropy'] = result
                 else:
                     result, time_elapsed = time_function(fun)(ts_data)
                     res[f] = result
@@ -828,7 +843,7 @@ def get_relative_entropy(x: np.ndarray) -> float:
     rel_entropy = entropy / max_entropy
     return rel_entropy
 
-@jit(forceobj=True)
+#@jit(forceobj=True)
 def get_lumpiness(x: np.ndarray, window_size: int = 8) -> float:
     """
     source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
@@ -849,7 +864,7 @@ def get_lumpiness(x: np.ndarray, window_size: int = 8) -> float:
     return np.var(v)
 
 # stability
-@jit(forceobj=True)
+#@jit(forceobj=True)
 def get_stability(x: np.ndarray, window_size: int = 8) -> float:
     """
     source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
@@ -882,6 +897,7 @@ def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
     Returns:
         The Hurst Exponent of the time series array
     """
+    lags = np.array(range(2, lag_size))
 
     # Create the range of cwt( of the variances of the lagged differences
     tau = [np.std(np.asarray(x)[lag:] - np.asarray(x)[:-lag]) for lag in lags]
@@ -930,14 +946,145 @@ def _mann_kendall_test(data: np.ndarray) -> float:
     trend = 1 if trend == 'increasing' else -1 if trend == 'decreasing' else 0        
     return s/n, z, Tau, s, var_s, slope, intercept, trend
 
-@jit(forceobj=True)
-def _wavelet_transform_feature(data: np.ndarray) -> float:
-    # This is a placeholder for a real wavelet transform feature extraction.
-    # For simplicity, we return the mean of the wavelet coefficients here.
-    # Replace this with your actual wavelet feature extraction logic.
-    widths = np.arange(1, 31)
-    cwtmatr = cwt(data, widths, 'mexh')
-    return np.mean(cwtmatr)
+#@jit(forceobj=True)
+def extract_cwt_features(data: np.ndarray, 
+                         wavelet='mexh', 
+                         scales=np.array([2, 3, 7]), 
+                         sampling_period=1.0) -> np.ndarray:
+    """
+    Extract features from Continuous Wavelet Transform of time series data.
+    
+    Parameters:
+    -----------
+    data : np.ndarray
+        The input time series data (1D array)
+    wavelet : str, optional
+        Wavelet to use (default: 'mexh')
+    scales : np.ndarray, optional
+        Scales for CWT (default: np.arange(1, 32))
+    sampling_period : float, optional
+        Sampling period for the input data (default: 1.0)
+        
+    Returns:
+    --------
+    np.ndarray
+        Feature vector containing various CWT-based features including entropy
+    """
+    # Normalize the data
+    data = (data - np.mean(data)) / (np.std(data) if np.std(data) > 0 else 1)
+    
+    # Default scales if not provided
+    if scales is None:
+        scales = np.arange(1, 32)
+    
+    # Calculate CWT coefficients
+    coefficients, frequencies = cwt(data, scales, wavelet, sampling_period)
+    
+    # Extract features from the coefficients matrix
+    features = []
+    
+    # Global statistics across all scales
+    features.append(np.mean(coefficients.flatten()))
+    features.append(np.std(coefficients.flatten()))
+    features.append(np.max(coefficients.flatten()))
+    features.append(np.min(coefficients.flatten()))
+    features.append(np.median(coefficients.flatten()))
+    
+    # Energy of coefficients (sum of squares)
+    energy = np.sum(coefficients**2)
+    features.append(energy)
+    
+    # Energy ratio in different frequency bands
+    # Divide coefficients into 4 bands and calculate energy ratio
+    num_bands = 4
+    bands = np.array_split(coefficients, num_bands, axis=0)
+    for band in bands:
+        band_energy = np.sum(band**2)
+        features.append(band_energy / energy if energy > 0 else 0)
+    
+    # Statistics for each scale
+    for i in range(3):  # Use first 5 scales or less
+        scale_coef = coefficients[i]
+        features.append(np.mean(scale_coef))
+        features.append(np.median(scale_coef))
+
+    # Scale with maximum energy
+    scale_energies = np.sum(coefficients**2, axis=1)
+    features.append(np.argmax(scale_energies))
+       
+    # Entropy measures
+    
+    # Shannon entropy of the absolute coefficients
+    def shannon_entropy(signal):
+        # Normalize the signal to get probabilities
+        abs_signal = np.abs(signal)
+        norm_signal = abs_signal / np.sum(abs_signal) if np.sum(abs_signal) > 0 else abs_signal
+        # Remove zeros to avoid log(0)
+        norm_signal = norm_signal[norm_signal > 0]
+        return -np.sum(norm_signal * np.log2(norm_signal))
+    
+    # Global Shannon entropy
+    flattened_coeffs = coefficients.flatten()
+    features.append(shannon_entropy(flattened_coeffs))
+    
+    # Shannon entropy for each scale
+    for i in range(min(3, len(scales))):  # First 3 scales
+        features.append(shannon_entropy(coefficients[i]))
+    
+    # Sample entropy (approximate using variance of log energy)
+    log_energy = np.log(np.sum(coefficients**2, axis=1) + 1e-10)
+    features.append(np.var(log_energy))    
+    
+    # Spectral entropy
+    power_spectrum = np.abs(np.mean(coefficients, axis=1))**2
+    total = np.sum(power_spectrum)
+    if total > 0:
+        prob = power_spectrum / total
+        spectral_entropy = -np.sum(prob * np.log2(prob + 1e-10))
+        features.append(spectral_entropy)
+    else:
+        features.append(0)
+    
+    # Permutation entropy approximation for the coefficient matrix
+    # We'll use a simplified version by looking at patterns in adjacent scales
+    # if len(scales) >= 3:
+    #     # Select a subset of time points for efficiency
+    #     n_points = min(100, coefficients.shape[1])
+    #     step = coefficients.shape[1] // n_points if coefficients.shape[1] > n_points else 1
+    #     subset = coefficients[:, ::step]
+        
+    #     # Count patterns of increase/decrease across 3 consecutive scales
+    #     patterns = np.zeros(6)  # 6 possible patterns for 3 consecutive values
+    #     for t in range(subset.shape[1]):
+    #         for s in range(len(scales)-2):
+    #             values = subset[s:s+3, t]
+    #             # Convert to ranks
+    #             pattern = np.argsort(np.argsort(values))
+    #             # Convert pattern to an index (0-5)
+    #             pattern_idx = pattern[0] * 2 + pattern[1]
+    #             patterns[pattern_idx] += 1
+        
+    #     # Calculate entropy from pattern frequencies
+    #     total_patterns = np.sum(patterns)
+    #     if total_patterns > 0:
+    #         probs = patterns / total_patterns
+    #         probs = probs[probs > 0]  # Remove zeros
+    #         perm_entropy = -np.sum(probs * np.log2(probs))
+    #         features.append(perm_entropy)
+    #     else:
+    #         features.append(0)
+    # else:
+    #     features.append(0)  # Default if not enough scales
+    
+    # Wavelet entropy - relative energy at each scale
+    if energy > 0:
+        rel_energies = scale_energies / energy
+        wavelet_entropy = -np.sum(rel_energies * np.log2(rel_energies + 1e-10))
+        features.append(wavelet_entropy)
+    else:
+        features.append(0)
+    
+    return np.array(features)
 
 @jit(forceobj=True)
 def get_het_arch(x: np.ndarray) -> float:
@@ -2574,30 +2721,101 @@ def extract_peaks_and_valleys(y, N=10):
 
     return feature_dict
 
-def extract_fft_features(y, x=None,  num_features = 5,max_frequency = 40):
-  # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
-  y= y -np.mean(y)
-  # Perform the Fourier Transform
-  Y = np.fft.fft(y)
-  # Calculate the frequency bins
-  if x is None:
-    x = np.linspace(0,len(y))
-  frequencies = np.fft.fftfreq(len(x), d=(x[1] - x[0]) / (2*np.pi))
-  Y_abs = 2*np.abs(Y) / len(x)
-  Y_abs[Y_abs < 1e-6] = 0
-  relevant_frequencies = np.where((frequencies>0) & (frequencies<max_frequency))
-  Y_phase = np.angle(Y)[relevant_frequencies]
-  frequencies = frequencies[relevant_frequencies]
-  Y_abs = Y_abs[relevant_frequencies]
-  largest_amplitudes = np.flip(np.argsort(Y_abs))[0:num_features]
-  top_5_amplitude = Y_abs[largest_amplitudes]
-  top_5_frequencies = frequencies[largest_amplitudes]
-  top_5_phases = Y_phase[largest_amplitudes]
-  fft_features = top_5_amplitude.tolist()+top_5_frequencies.tolist()+top_5_phases.tolist()
-  amp_keys = ['Amplitude '+str(i) for i in range(1,num_features+1)]
-  freq_keys = ['Frequency '+str(i) for i in range(1,num_features+1)]
-  phase_keys = ['Phase '+str(i) for i in range(1,num_features+1)]
-  fft_keys = amp_keys+freq_keys+phase_keys
-  fft_dict = {fft_keys[i]:fft_features[i] for i in range(len(fft_keys))}
-  return fft_dict
+def extract_fft_features(y, x=None, num_features=5, max_frequency=40):
+    """
+    Extract frequency domain features from a time series signal using FFT.
+    
+    Parameters:
+    -----------
+    y : array-like
+        The input signal time series.
+    x : array-like, optional
+        The time points corresponding to y. If None, equally spaced points are used.
+    num_features : int, default=5
+        Number of top frequency components to extract.
+    max_frequency : float, default=40
+        Maximum frequency (Hz) to consider.
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing the top amplitudes, frequencies, and phases.
+        Keys are 'Amplitude N', 'Frequency N', and 'Phase N' where N is 1 to num_features.
+    
+    Credits:
+    --------
+    Adapted from: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
+    """
+    import numpy as np
+    
+    # Input validation
+    y = np.asarray(y)
+    if len(y) == 0:
+        raise ValueError("Input signal y cannot be empty")
+        
+    # Prepare time series data
+    y_centered = y - np.mean(y)
+    
+    # Handle time points
+    if x is None:
+        x = np.linspace(0, len(y), len(y))
+    else:
+        x = np.asarray(x)
+        if len(x) != len(y):
+            raise ValueError(f"Length of x ({len(x)}) must match length of y ({len(y)})")
+    
+    # Compute FFT
+    Y = np.fft.fft(y_centered)
+    
+    # Calculate frequency bins
+    time_step = (x[1] - x[0]) / (2 * np.pi)
+    frequencies = np.fft.fftfreq(len(y), d=time_step)
+    
+    # Calculate amplitude spectrum
+    amplitudes = 2 * np.abs(Y) / len(y)
+    amplitudes[amplitudes < 1e-6] = 0  # Remove numerical noise
+    
+    # Filter to relevant frequencies
+    relevant_indices = np.where((frequencies > 0) & (frequencies < max_frequency))[0]
+    
+    # Ensure we have enough relevant frequencies
+    if len(relevant_indices) == 0:
+        raise ValueError(f"No frequencies found between 0 and {max_frequency}Hz")
+    
+    # Extract relevant frequency domain information
+    filtered_phases = np.angle(Y)[relevant_indices]
+    filtered_frequencies = frequencies[relevant_indices]
+    filtered_amplitudes = amplitudes[relevant_indices]
+    
+    # Get indices of top frequency components
+    num_components = min(num_features, len(filtered_amplitudes))
+    top_indices = np.flip(np.argsort(filtered_amplitudes))[:num_components]
+    
+    # Extract top components
+    top_amplitudes = filtered_amplitudes[top_indices]
+    top_frequencies = filtered_frequencies[top_indices]
+    top_phases = filtered_phases[top_indices]
+    
+    # Pad with zeros if not enough components found
+    if num_components < num_features:
+        top_amplitudes = np.pad(top_amplitudes, (0, num_features - num_components))
+        top_frequencies = np.pad(top_frequencies, (0, num_features - num_components))
+        top_phases = np.pad(top_phases, (0, num_features - num_components))
+    
+    # Build feature dictionary
+    all_features = (
+        top_amplitudes.tolist() + 
+        top_frequencies.tolist() + 
+        top_phases.tolist()
+    )
+    
+    # Create dictionary keys
+    feature_keys = (
+        [f'Amplitude {i}' for i in range(1, num_features + 1)] +
+        [f'Frequency {i}' for i in range(1, num_features + 1)] +
+        [f'Phase {i}' for i in range(1, num_features + 1)]
+    )
+    
+    # Create and return the feature dictionary
+    return dict(zip(feature_keys, all_features))
 
