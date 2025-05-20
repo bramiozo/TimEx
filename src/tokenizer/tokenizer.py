@@ -124,56 +124,6 @@ class ECGSignalProcessor:
           print(quality)
 
 
-
-
-    def tokenizer_sax(self,trimmed):
-        his_dat=[]
-        his_inv_dat=[]
-        for sig in trimmed:
-            signal1=sig.reshape(1,-1)
-            sax = SymbolicAggregateApproximation(n_segments=100, alphabet_size_avg=200)
-            sax_data = sax.fit_transform(signal1)
-            sax_inv=sax.inverse_transform(sax_data)
-            sax_d=sax_data.reshape(100,)
-            sax_inv_d=sax_inv.reshape(-1)
-            his_dat.append(sax_d)
-            self.hist=np.array(his_dat)
-#            plt.plot(sig)
-#            plt.plot(sax_inv_d)
-#            plt.show()
-#            plt.hist(his_dat)
-#            plt.show()
-        return self.hist
-
-
-
-
-
-
-    def tokenizer_ld_sax(self,trimmed):
-        his_dat=[]
-        for sig in trimmed:
-            signal1=sig.reshape(1,-1)
-            ld_sax = OneD_SymbolicAggregateApproximation(n_segments=100, alphabet_size_avg=100, alphabet_size_slope=100)
-            ld_sax_data = ld_sax.fit_transform(signal1)
-            ld_sax_inv=ld_sax.inverse_transform(ld_sax_data)
-            ld_sax_d=ld_sax_data.reshape(200,)
-
-
-
-
-            ld_sax_inv_d=ld_sax_inv.reshape(-1)
-            ld_sax_inv_dd=[ld_sax_inv_d[i] for i in range(len(ld_sax_inv_d)) if not math.isnan(ld_sax_inv_d[i])]
-            t=np.linspace(0,5000,len(ld_sax_inv_dd))
-            plt.plot(sig)
-            plt.plot(t,ld_sax_inv_dd)
-            plt.show()
-            his_dat.append(ld_sax_d)
-
-        plt.hist(his_dat)
-        plt.show()
-
-
 p_signals=[]
 n_sig=[]
 sig_len=[]
@@ -256,9 +206,6 @@ toks_sax_new=toks_sax.reshape(-1)
 plt.hist(toks_sax_new)
 plt.show()
 
-#for i in range(len(toks_sax_inv)):
-#  plt.plot(np.linspace(0,10,len(toks_sax_inv[i])),toks_sax_inv[i])
-#  plt.show()
 
 
 toks_ld, toks_ld_inv=tokenizer_ld(all_data)
@@ -282,12 +229,9 @@ toks_ld_new=toks_ld.reshape(-1)
 plt.hist(toks_ld_new)
 plt.show()
 
-#for i in range(len(toks_ld_inv)):
-#  plt.plot(np.linspace(0,10,len(toks_ld_inv[i])),toks_ld_inv[i])
-#  plt.show()
+
+#Create .json
 
 tokens={"toks_sax" : toks_sax.tolist(), "toks_ld" : toks_ld.tolist()}
-
-
 with open("tokens.json", "w") as json_file:
     json.dump(tokens, json_file)
