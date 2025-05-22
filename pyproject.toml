@@ -45,6 +45,7 @@ tsfeatures = "^0.4.5"
 tsfel = "^0.1.9"
 missingno = "^0.5.2"
 umap-learn = "^0.5.7"
+dtwparallel = "^0.9.41"
 
 
 [tool.poetry.group.dev.dependencies]
