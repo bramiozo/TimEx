@@ -25,8 +25,8 @@ class save_signals:
         for i in range(len(self.filepaths)):
             for j in range(self.n_sig[0]):
                 signals = {
-                    "record_name": self.record_name[i],
-                    "sig_name": {
+                    "id": self.record_name[i],
+                    "channel": {
                         self.sig_name[i][j]: {
                             "tokens_sax": self.toks_sax[i][j].tolist(),
                             "tokens_sax_inv": self.toks_sax_inv[i][j].tolist(),
