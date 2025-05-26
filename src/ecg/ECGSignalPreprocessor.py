@@ -1,0 +1,120 @@
+import wfdb
+import pandas as pd
+import numpy as np
+import torch
+import scipy as sc
+import urllib.request as ur
+import csv
+from pathlib import Path
+import urllib.parse
+from scipy import signal
+import neurokit2 as nk
+
+import os
+import sys
+import re
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
+
+
+
+
+class ECGSignalProcessor:
+    def __init__(self, p_signal, n_sig, sig_len, sig_name, x, fs=500):
+
+        self.fs = fs
+        self.n_sig = n_sig
+        self.sig_len = sig_len
+        self.sig_name = sig_name
+        self.p_signal = p_signal
+        self.x = x
+        self.filtered_signal = None
+        self.filtered_signal2 = None
+        self.smoothed = None
+        self.detrend = None
+        self.trim_arr = None
+        self.peaks = None
+        self.dips = None
+
+
+
+    def plot_signals(self):
+        fig, axes = plt.subplots(nrows=self.n_sig, ncols=1, figsize=(18, 35))
+        for i in range(self.n_sig):
+            axes[i].plot(self.x, self.p_signal[i])
+            axes[i].set_title(self.sig_name[i])
+        plt.show()
+
+    def detect_peaks_and_dips(self):
+
+        for i in range(self.n_sig):
+          self.peaks, _ = find_peaks(self.p_signal[i], distance=30, prominence=(0.1))
+          self.dips, _ = find_peaks(-self.p_signal[i], distance=250)
+
+
+
+    def apply_bandpass_filter(self, lowcut=0.5, highcut=40.0, order=4):
+        nyq = 0.5 * self.fs
+        sos = butter(order, [lowcut / nyq, highcut / nyq], btype='band', output='sos')
+        self.filtered_signal= np.array([sosfilt(sos, sig) for sig in self.p_signal], dtype='float32')
+        return self.filtered_signal
+
+
+
+
+    def apply_notch_filter(self, filtered, freq=60.0, bandwidth=1.0, order=4):
+        nyq = 0.5 * self.fs
+        b, a = butter(order, [(freq - bandwidth) / nyq, (freq + bandwidth) / nyq], btype='bandstop')
+        self.filtered_signal2= np.array([filtfilt(b, a, sig) for sig in filtered], dtype='float32')
+        return self.filtered_signal2
+
+
+    def apply_savgol_filter(self, filtered, window_length=31, polyorder=3):
+        for i in range(self.n_sig):
+          self.smoothed= np.array([savgol_filter(sig, window_length, polyorder) for sig in filtered], dtype='float32')
+          t = np.linspace(0, 10, len(self.smoothed))
+          return self.smoothed
+
+
+
+    def apply_detrend(self, filtered):
+        for i in range(self.n_sig):
+          self.detrend=np.array([detrend(sig, type='linear') for sig in filtered], dtype='float32')
+          t = np.linspace(0, 10, len(self.detrend))
+
+
+
+
+    def trim_signal(self, filtered):
+        trim_signals = []
+        trim_times = []
+        for i in range(self.n_sig):
+          peaks, _ = find_peaks(filtered[i], distance=30, prominence=(0.1))
+          dips, _ = find_peaks(-filtered[i], distance=250)
+          start_point = min(peaks[0], dips[0])
+          end_point = max(peaks[-1], dips[-1])
+          trimmed = filtered[i][start_point:end_point]
+          time_trimmed = np.linspace(self.x[start_point], self.x[end_point], len(trimmed))
+          trim_signals.append(trimmed)
+          trim_times.append(time_trimmed)
+
+          #plt.figure(figsize=(15, 5))
+          #plt.plot(self.x[peaks], filtered[i][peaks], 'o', color='red')
+          #plt.plot(self.x[dips], filtered[i][dips], 'o', color='green')
+          #plt.plot(self.x, filtered[i])
+          #plt.plot(time_trimmed, trimmed, color='orange')
+          #plt.title('Trimmed Signal')
+          #plt.show()
+          self.trim_arr=np.array(trim_signals, dtype='object')
+          self.trim_time_arr= np.array(trim_times, dtype='object')
+        return self.trim_arr
+
+
+
+    def quality_check(self, trimmed):
+        for sig in trimmed:
+          quality = nk.ecg_quality(sig, method= 'zhao2018', approach= 'fuzzy', sampling_rate=self.fs)
+          print(quality)
+          
