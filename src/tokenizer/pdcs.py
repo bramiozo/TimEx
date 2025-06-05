@@ -4,11 +4,14 @@ import numpy as np
 from numpy.linalg import norm
 import numba
 from transformers import PreTrainedTokenizer
+from transformers.PreTrainedTokenizer import added_token as AddedToken
 import fastdtw
 from dtwParallel import dtw_functions
 from scipy.spatial import distance as d
 from sklearn.cluster import BisectingKMeans, KMeans
 
+import argparse
+import json
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
@@ -94,20 +97,21 @@ class CanonicalPatterns():
         """
         pass
 
-
     def get_canonicals(self)-> Dict[int, np.ndarray]:
         """
             Given the cluster assignments we would like to extract one statistical
             average of the timeseries. We do this with LOWESS
         """
-        pass
+        self.canonicals = {1:np.array([1,2,3,4,5])}
+        return self.canonicals
 
-    def write_canonicals_to_json(self):
+    def write_canonicals_to_json(self, Output: str="canonical_pdcs.json"):
         """
             Given a dictionary Dict[int, np.ndarray], write a json to disk
         """
-        pass
 
+        fw = open(Output, 'w', encoding='utf-8')
+        json.dump(self.canonicals, fw)
 
 
 class TsTokenizer(PreTrainedTokenizer):
@@ -115,7 +119,8 @@ class TsTokenizer(PreTrainedTokenizer):
         Pre-Defined Canonical Shapes -> transform requires scanning the timeseries and using some similarity metric
     '''
 
-    def __init__(self, pattern_dict: Dict[int, np.ndarray], max_len: int|None, num_channels: int|None, stride: int=20, window: int=50, truncation: bool=True, truncation_side: str='right', padding: bool=True, padding_side: str='right', padding_token: int=-100):
+    def __init__(self, pattern_dict: Dict[int, np.ndarray], max_len: int|None, num_channels: int|None, stride: int=20, window: int=50, truncation: bool=True, truncation_side: str='right', padding: bool=True, padding_side: str='right', padding_token_id: int=-100,
+    ):
         """
             pattern_dict: dictionary with match patterns
             stride: stride by which we move through the timeseries to match the pattern
@@ -128,6 +133,12 @@ class TsTokenizer(PreTrainedTokenizer):
             padding_side: 'left', 'right', or 'center'
         """
 
+        # initialize base tokenizer (no vocab files)
+        super().__init__(pad_token=str(padding_token),
+            truncation_side=truncation_side, padding_side=padding_side)
+        # assert required parameters
+        if max_len is None or num_channels is None:
+            raise ValueError("Both max_len and num_channels must be provided")
         # add asserts
         self.pattern_dict = pattern_dict
         self.stride = stride
@@ -140,6 +151,16 @@ class TsTokenizer(PreTrainedTokenizer):
         self.padding = padding
         self.padding_side = padding_side
         self.padding_token = padding_token
+        # token id space: include all pattern ids and padding
+        self.token_ids = set(pattern_dict.keys()) | {padding_token}
+        # set attributes
+        self.pad_token_id = 0
+        self.pad_token = "<pad>"
+        self.bos_token_id = 1
+        self.eos_token_id = 2
+        self.mask_token_id = 3
+        self.cls_token_id = 4
+        self.sep_token_id = 5
         self.similarity_type = 'cosine'
 
     @staticmethod
@@ -173,9 +194,6 @@ class TsTokenizer(PreTrainedTokenizer):
         """
             ts: 1D array
         """
-        max_len = len(ts)
-        # create list of range tuples
-        prev = 0
         # Calculate the potential number of tokens from the input timeseries
         num_possible_tokens = len(ts) // self.stride
         # Determine the target length for the output tokens array
@@ -184,28 +202,101 @@ class TsTokenizer(PreTrainedTokenizer):
         # Initialize the tokens array with padding tokens.
         # The shape is determined by the target_len, which is guaranteed to be an integer.
         tokens = np.full((target_len,), self.padding_token, dtype=np.int16)
-        for i, s in enumerate(range(max_len//self.stride)):
-            move = s*self.stride
-            segment = ts[prev + move : prev+self.window + move]
+        for i in range(num_possible_tokens):
+            move = i * self.stride
+            segment = ts[move : move + self.window]
             # check similarity with pattern_dict, select closest match id as token
-            token = closest_match(segment)
+            token = self.closest_match(segment)
             tokens[i] = token
         return tokens
 
-    def _transform(self, X: List[NDArray2D])->List[NDArray2D]:
+    def _transform(self, X: List[NDArray2D]) -> List[np.ndarray]:
         """
             Given a timeseries: x<-(ns, sz, d) we generate a tokenized timeseries xt<-(ns, st, d)
         """
-        # do asserts ..
-
-        tokenized_set = []
+        tokenized_set: List[np.ndarray] = []
         for ts in X:
-            #TODO Need to deal with self.max_len is None !
-            Tarr = np.zeros(self.max_len, self.num_channels, dtype=np.int8)
+            # generate token sequence per channel
+            target_len = self.max_len if self.max_len is not None else (ts.shape[0] // self.stride)
+            Tarr = np.full((target_len, int(self.num_channels)), self.padding_token, dtype=np.int16)
             for channel in range(ts.shape[1]):
                 toks = self.get_tokens(ts[:, channel])
-                # truncation and padding
-                #
-                Tarr[:, channel] = toks
+                length = min(len(toks), target_len)
+                Tarr[:length, channel] = toks[:length]
             tokenized_set.append(Tarr)
         return tokenized_set
+
+    # Transformers compatibility methods
+    @property
+    def model_input_names(self) -> List[str]:
+        return ["input_ids", "attention_mask"]
+
+    def _tokenize(self, series: np.ndarray) -> List[int]:
+        # single-channel or multi-channel series
+        # flatten to 2D array (n_samples, n_channels)
+        if series.ndim == 1:
+            arr = series.reshape(-1, 1)
+        else:
+            arr = series
+        tokens = self._transform([arr])[0]
+        return tokens.flatten().tolist()
+
+    def _convert_token_to_id(self, token: str) -> int:
+        return int(token)
+
+    def _convert_id_to_token(self, index: int) -> str:
+        return str(index)
+
+    def encode_plus(
+        self,
+        series: np.ndarray,
+        return_tensors: Optional[str] = None,
+        **kwargs) -> Dict[str, List[int]]:
+        input_ids = self._tokenize(series)
+        attention_mask = [1 if tok != self.padding_token else 0 for tok in input_ids]
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+    def decode(
+        self,
+        token_ids: List[int],
+        **kwargs,
+    ) -> str:
+        return ' '.join(self._convert_id_to_token(i) for i in token_ids)
+
+    def get_vocab(self) -> Dict[str, int]:
+        """Returns the vocabulary as mapping from token strings to ids."""
+        return {str(i): i for i in sorted(self.token_ids)}
+
+    @property
+    def vocab_size(self) -> int:
+        return len(self.token_ids)
+
+    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
+        import os
+        # ensure directory exists
+        os.makedirs(save_directory, exist_ok=True)
+        file_name = (filename_prefix or "vocab") + ".json"
+        path = os.path.join(save_directory, file_name)
+        # write token-to-id mapping
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(self.get_vocab(), f)
+        return (path,)
+
+if __name__ == "__main__":
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--input_series', type=str, default=None)
+    argparser.add_argument('--input_canonical', type=str, default=None)
+    argparser.add_argument('--save_folder', type=str)
+    argparser.add_argument('--test', action='store_true', default=False)
+
+    args = argparser.parse_args()
+
+    if args.test:
+    # load test series to test CanonicalPatterns
+    #
+
+    # load test patterns to test tokenizers
+    #
+
+    # inverse transform the tokenizer to check output validity
+    # Make line plot with test timeseries (noisy sinus)
