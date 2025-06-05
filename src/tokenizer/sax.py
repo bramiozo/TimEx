@@ -13,22 +13,26 @@ from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, s
 from pathlib import Path
 import importlib
 from sklearn import preprocessing
-
-
-
+from preprocessor import ECGSignalProcessor
+import pickle
 
 
 class ECGTokenizer:
-    def __init__(self, data, n_segments=1000, alphabet_size=500):
+    def __init__(self, data, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
+        # ASSUMES THAT SAMPLING RATE IS 250Hz!!!!!!!
         self.data = data
-        self.n_segments = n_segments
+        self.n_segments_freq = n_segments_freq
         self.alphabet_size = alphabet_size
         self.toks_sax = None
         self.toks_sax_inv = None
         self.toks_ld = None
         self.toks_ld_inv = None
+        self.min_value = min_value
+        self.max_value = max_value
+        self.n_segments = self.n_segments_freq*data.shape[2]//250
 
     def tokenize_sax(self):
+        # TODO: move data loading to function after init
         his_dat = []
         his_inv_dat = []
         for sig_group in self.data:
@@ -44,9 +48,9 @@ class ECGTokenizer:
         self.toks_sax_inv = his_inv_dat
         return self.toks_sax, self.toks_sax_inv
 
-
-
     def tokenize_1d_sax(self):
+        # TODO: move data loading to function after init
+        # TODO: 1d SAX not working, or slow
         his_dat = []
         his_inv_dat = []
         for sig_group in self.data:
@@ -67,7 +71,7 @@ class ECGTokenizer:
         cleaned = []
         for seq in self.toks_ld_inv:
           seq = np.nan_to_num(seq)  # Remove NaNs
-          seq = np.where((-2 <= seq) & (seq <= 2), seq, 0)  # Clamp extreme values
+          seq = np.where((-self.min_value <= seq) & (seq <= self.max_value), seq, 0)  # Clamp extreme values
           cleaned.append(seq)
         self.toks_ld_inv = cleaned
 
@@ -89,3 +93,7 @@ class ECGTokenizer:
         tokens = {"toks_sax": toks_sax.tolist(), "toks_ld": toks_ld.tolist()}
         with open(filename, "w") as f:
           json.dump(tokens, f)
+
+    def save_model(self, save_directory: str="sax_model.pkl"):
+        with open(save_directory, 'wb') as file:
+            file.write(pickle.dumps(self))
