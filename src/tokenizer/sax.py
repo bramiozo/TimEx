@@ -18,9 +18,9 @@ import pickle
 
 
 class ECGTokenizer:
-    def __init__(self, data, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
+    def __init__(self, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
         # ASSUMES THAT SAMPLING RATE IS 250Hz!!!!!!!
-        self.data = data
+        
         self.n_segments_freq = n_segments_freq
         self.alphabet_size = alphabet_size
         self.toks_sax = None
@@ -31,11 +31,11 @@ class ECGTokenizer:
         self.max_value = max_value
         self.n_segments = self.n_segments_freq*data.shape[2]//250
 
-    def tokenize_sax(self):
+    def tokenize_sax(self, data):
         # TODO: move data loading to function after init
         his_dat = []
         his_inv_dat = []
-        for sig_group in self.data:
+        for sig_group in data:
             for sig in sig_group:
                 signal1 = sig.reshape(1, -1)
                 sax = SymbolicAggregateApproximation(n_segments=self.n_segments, alphabet_size_avg=self.alphabet_size)
@@ -48,12 +48,12 @@ class ECGTokenizer:
         self.toks_sax_inv = his_inv_dat
         return self.toks_sax, self.toks_sax_inv
 
-    def tokenize_1d_sax(self):
+    def tokenize_1d_sax(self, data):
         # TODO: move data loading to function after init
         # TODO: 1d SAX not working, or slow
         his_dat = []
         his_inv_dat = []
-        for sig_group in self.data:
+        for sig_group in data:
           for sig in sig_group:
               signal1 = sig.reshape(1, -1)
               ld_sax = OneD_SymbolicAggregateApproximation(n_segments=self.n_segments, alphabet_size_avg=self.alphabet_size, alphabet_size_slope=self.alphabet_size)
