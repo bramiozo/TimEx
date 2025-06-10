@@ -18,8 +18,11 @@ import pickle
 
 class ECGTokenizer:
     def __init__(self, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
+        # ASSUMES THAT SAMPLING RATE IS 250Hz!!!!!!!
 
-
+    def __init__(self, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
+        # ASSUMES THAT SAMPLING RATE IS 250Hz!!!!!!!
+        
         self.n_segments_freq = n_segments_freq
         self.alphabet_size = alphabet_size
         self.toks_sax = None
