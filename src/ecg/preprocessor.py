@@ -19,8 +19,6 @@ import seaborn as sns
 from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
 
 
-
-
 class ECGSignalProcessor:
     def __init__(self, p_signal, n_sig, sig_len, sig_name, x, fs=500):
 
@@ -38,8 +36,6 @@ class ECGSignalProcessor:
         self.peaks = None
         self.dips = None
 
-
-
     def plot_signals(self):
         fig, axes = plt.subplots(nrows=self.n_sig, ncols=1, figsize=(18, 35))
         for i in range(self.n_sig):
@@ -53,15 +49,11 @@ class ECGSignalProcessor:
           self.peaks, _ = find_peaks(self.p_signal[i], distance=30, prominence=(0.1))
           self.dips, _ = find_peaks(-self.p_signal[i], distance=250)
 
-
-
     def apply_bandpass_filter(self, lowcut=0.5, highcut=40.0, order=4):
         nyq = 0.5 * self.fs
         sos = butter(order, [lowcut / nyq, highcut / nyq], btype='band', output='sos')
         self.filtered_signal= np.array([sosfilt(sos, sig) for sig in self.p_signal], dtype='float32')
         return self.filtered_signal
-
-
 
 
     def apply_notch_filter(self, filtered, freq=60.0, bandwidth=1.0, order=4):
@@ -78,14 +70,10 @@ class ECGSignalProcessor:
           return self.smoothed
 
 
-
     def apply_detrend(self, filtered):
         for i in range(self.n_sig):
           self.detrend=np.array([detrend(sig, type='linear') for sig in filtered], dtype='float32')
           t = np.linspace(0, 10, len(self.detrend))
-
-
-
 
     def trim_signal(self, filtered):
         trim_signals = []
@@ -100,13 +88,6 @@ class ECGSignalProcessor:
           trim_signals.append(trimmed)
           trim_times.append(time_trimmed)
 
-          #plt.figure(figsize=(15, 5))
-          #plt.plot(self.x[peaks], filtered[i][peaks], 'o', color='red')
-          #plt.plot(self.x[dips], filtered[i][dips], 'o', color='green')
-          #plt.plot(self.x, filtered[i])
-          #plt.plot(time_trimmed, trimmed, color='orange')
-          #plt.title('Trimmed Signal')
-          #plt.show()
           self.trim_arr=np.array(trim_signals, dtype='object')
           self.trim_time_arr= np.array(trim_times, dtype='object')
         return self.trim_arr
@@ -117,4 +98,3 @@ class ECGSignalProcessor:
         for sig in trimmed:
           quality = nk.ecg_quality(sig, method= 'zhao2018', approach= 'fuzzy', sampling_rate=self.fs)
           print(quality)
-          
