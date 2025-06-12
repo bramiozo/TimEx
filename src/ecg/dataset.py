@@ -41,6 +41,7 @@ class Config:
     TRAIN_SIZE = 0.8
     VAL_SIZE = 0.1
     RANDOM_SEED = 42
+    SAMPLING_RATE = 500
 
     # Training settings
     BATCH_SIZE = 32
@@ -48,7 +49,6 @@ class Config:
     LEARNING_RATE = 1e-4
     WEIGHT_DECAY = 1e-4
     EARLY_STOPPING_PATIENCE = 5
-
 
     # Device
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -61,26 +61,6 @@ class Config:
     TIME_SHIFT_MAX = 0.2
     AMPLITUDE_SCALE_PROB = 0.5
     AMPLITUDE_SCALE_RANGE = (0.7, 1.2)
-
-    # Preprocessing settings
-    SAMPLING_RATE = 500
-
-    # Stratified sampling to handle imbalance
-    USE_STRATIFIED_SAMPLING = True
-    OVERSAMPLE_RARE_DISEASES = Truere_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9]+)', re.IGNORECASE)
-
-
-    # Further optimized class-specific thresholds
-    USE_CLASS_THRESHOLDS = True
-    DEFAULT_THRESHOLD = 0.5
-    RARE_DISEASE_THRESHOLD = 0.2
-    VERY_RARE_DISEASE_THRESHOLD = 0.15
-
-    # Mixed precision to speed up training
-    USE_MIXED_PRECISION = True
-
-    # Balanced sampling weights
-    BALANCE_SAMPLING_BY_CLASS = True
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
@@ -102,14 +82,14 @@ class ECGDataset(Dataset):
         df,
         label_binarizer,
         is_train=True,
-        supervised=True,
+        supervised=False,
         extract_label=True,
         extract_metadata=True,
         config=None,
-        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss'],
+        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
-                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
-                                     = ['bandpass', 'resampler']
+                                    'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
+                                     = ['bandpass', 'resampler', 'detrend']
         ):
 
         if isinstance(df, pd.DataFrame):
@@ -131,6 +111,9 @@ class ECGDataset(Dataset):
         else:
             raise ValueError("Unsupported data source format." \
             " Must be DataFrame, list of paths, or folder.")
+
+        if supervised is False:
+            extract_label = False
 
         self.supervised = supervised
         self.label_binarizer = label_binarizer
@@ -487,11 +470,9 @@ class ECGDataset(Dataset):
             else:
                 # If no record, set metadata to None
                 metadata = None
-
-
             return file_path, idx, signal, label, metadata
         except Exception as e:
             print(f"Error processing record {idx}: {e}")
             signal = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH))
             label = torch.zeros(len(self.label_binarizer.classes_))
-            return file_path, idx, signal, label, None
+            return None, idx, signal, label, None

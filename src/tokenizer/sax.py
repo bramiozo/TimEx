@@ -13,13 +13,13 @@ from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, s
 from pathlib import Path
 import importlib
 from sklearn import preprocessing
-from preprocessor import ECGSignalProcessor
 import pickle
 
 
 class ECGTokenizer:
     def __init__(self, data, n_segments_freq=5, alphabet_size=500, min_value=-2, max_value=2):
         # ASSUMES THAT SAMPLING RATE IS 250Hz!!!!!!!
+        # Assumption is that data has already passed through the ECGSignalProcessor.
         self.data = data
         self.n_segments_freq = n_segments_freq
         self.alphabet_size = alphabet_size
