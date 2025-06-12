@@ -52,6 +52,7 @@ class ECG_token_ts:
                     }
 
             self.ecg_signals.append(record_dict)
+        return ecg_signals    
 
     def save_to_json(self, filename="new_ecg.json"):
         with open(filename, "w") as f:
