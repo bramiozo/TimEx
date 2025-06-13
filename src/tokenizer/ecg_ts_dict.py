@@ -33,6 +33,11 @@ class ECG_token_ts:
         )
         return self.segm, self.toks
 
+    def toks_to_sentence(self, toks_sax): #Join 12 leads from a file and make a sentence
+        toks = toks_sax.reshape(len(self.filepaths), self.n_sig[0] * self.n_segments)
+        toks = np.array([' '.join(map(str, row)) for row in toks])
+        return toks
+
     def generate_ecg_dict(self):
         for i in range(len(self.filepaths)):
             record_dict = {
