@@ -9,6 +9,7 @@ from pathlib import Path
 import urllib.parse
 from scipy import signal
 import neurokit2 as nk
+from wfdb.processing import resample_sig
 
 import os
 import sys
@@ -18,15 +19,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
 
-
 class ECGSignalProcessor:
-    def __init__(self, p_signal, n_sig, sig_len, sig_name, x, fs=500):
+    def __init__(self, data, num_channels, channel_length, channel_names, x, fs=500):
 
         self.fs = fs
-        self.n_sig = n_sig
-        self.sig_len = sig_len
-        self.sig_name = sig_name
-        self.p_signal = p_signal
+        self.n_sig = num_channels
+        self.sig_len = channel_length
+        self.sig_name = channel_names
+        self.p_signal = data
         self.x = x
         self.filtered_signal = None
         self.filtered_signal2 = None
@@ -35,6 +35,9 @@ class ECGSignalProcessor:
         self.trim_arr = None
         self.peaks = None
         self.dips = None
+
+    # add augmentation
+    #
 
     def plot_signals(self):
         fig, axes = plt.subplots(nrows=self.n_sig, ncols=1, figsize=(18, 35))
@@ -80,7 +83,7 @@ class ECGSignalProcessor:
         trim_times = []
         for i in range(self.n_sig):
           peaks, _ = find_peaks(filtered[i], distance=30, prominence=(0.1))
-          dips, _ = find_peaks(-filtered[i], distance=250)
+          dips, _ =  find_peaks(-filtered[i], distance=250)
           start_point = min(peaks[0], dips[0])
           end_point = max(peaks[-1], dips[-1])
           trimmed = filtered[i][start_point:end_point]
@@ -92,9 +95,48 @@ class ECGSignalProcessor:
           self.trim_time_arr= np.array(trim_times, dtype='object')
         return self.trim_arr
 
+    # TODO: EXTERNAL, needs refactoring
+    def augment_signal(self, signal):
+        """Apply enhanced augmentations to the signal"""
+        if not self.is_train or not self.config.USE_AUGMENTATION:
+            return signal
 
+        # Time shift augmentation (increased probability and range)
+        if 'shift' in self.augmentations:
+            if np.random.random() < self.config.TIME_SHIFT_PROB:
+                shift_factor = np.random.uniform(-self.config.TIME_SHIFT_MAX, self.config.TIME_SHIFT_MAX)
+                shift_amount = int(shift_factor * signal.shape[1])
+                if shift_amount > 0:
+                    signal = torch.cat([signal[:, shift_amount:], signal[:, :shift_amount]], dim=1)
+                elif shift_amount < 0:
+                    shift_amount = abs(shift_amount)
+                    signal = torch.cat([signal[:, -shift_amount:], signal[:, :-shift_amount]], dim=1)
+
+        # TODO: scale should only be applied to the peaks/valleys
+        if 'scale' in self.augmentations:
+            # Amplitude scaling augmentation
+            if np.random.random() < self.config.AMPLITUDE_SCALE_PROB:
+                scale_factor = np.random.uniform(*self.config.AMPLITUDE_SCALE_RANGE)
+                signal = signal * scale_factor
+
+        if 'gauss' in self.augmentations:
+            # Enhanced Gaussian noise
+            if np.random.random() < self.config.GAUSSIAN_NOISE_PROB:
+                noise = torch.randn_like(signal) * self.config.GAUSSIAN_NOISE_SCALE
+                signal = signal + noise
+
+        if 'dropout' in self.augmentations:
+            # Lead dropout (randomly zero out leads to improve robustness)
+            if np.random.random() < 0.8:  # 10% chance
+                lead_idx = np.random.randint(0, int(0.05*signal.shape[0]))
+                signal[lead_idx] = signal[lead_idx] * 0.0
+
+        return signal
+
+    # resample
 
     def quality_check(self, trimmed):
+        #TODO: nk is FF-ing slow, find alternative..
         for sig in trimmed:
           quality = nk.ecg_quality(sig, method= 'zhao2018', approach= 'fuzzy', sampling_rate=self.fs)
           print(quality)
