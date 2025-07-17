@@ -46,11 +46,12 @@ logging.info("Initializing Config class")
 class Config:
     # Data settings
     LEADS = 12
-    INPUT_LENGTH = 5_000
+    INPUT_LENGTH = 10_000
     TRAIN_SIZE = 0.8
     VAL_SIZE = 0.1
     RANDOM_SEED = 42
     SAMPLING_RATE = 500
+    MAX_OUTPUT_LENGTH = 5_000  # Maximum length of the output signal after re-sampling
 
     # Training settings
     BATCH_SIZE = 32
@@ -73,8 +74,8 @@ class Config:
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
-#TODO: the pre-processing should be off-loaded to the ecg.preprocessor class
-#
+# TODO: the pre-processing should be off-loaded to the ecg.preprocessor class
+# TODO: add class weights as an attribute
 
 def check_if_var_is_list_of_str_or_int(var: List[str|int])-> Tuple[bool,bool]:
     if not isinstance(var, list):
@@ -260,6 +261,21 @@ class ECGDataset(Dataset):
 
         return torch.tensor(signal, dtype=torch.float32), comment
 
+    def compute_weights(self):
+        #logger.info("Computing weights...")
+        if len(self.diagnoses_cols) > 1:
+            weights = []
+            for label in self.diagnoses_cols:
+                count = self.ecg_dataframe[label].sum()
+                weight = (self.ecg_dataframe.__len__() - count) / (count + 1e-9)
+                weights.append(weight)
+        else:
+            num_labels = self.ecg_dataframe[self.diagnoses_cols[0]].max() + 1
+            weights = num_labels / self.ecg_dataframe[self.diagnoses_cols].value_counts()
+            weights = weights.values.tolist()
+        #logger.info("Done with the weights.")
+        return torch.FloatTensor(weights)
+
 
     def augment_signal(self, signal):
         """Apply enhanced augmentations to the signal"""
@@ -420,13 +436,13 @@ class ECGDataset(Dataset):
         signal = torch.clamp(signal, -5.0, 5.0)
 
     def _standardize_signal_length(self, signal):
-        if signal.shape[1] > self.config.INPUT_LENGTH:
+        if signal.shape[1] > self.config.MAX_OUTPUT_LENGTH:
             # Center crop
-            start = (signal.shape[1] - self.config.INPUT_LENGTH)
-            signal = signal[:, start:start + self.config.INPUT_LENGTH]
-        elif signal.shape[1] < self.config.INPUT_LENGTH:
+            start = (signal.shape[1] - self.config.MAX_OUTPUT_LENGTH)
+            signal = signal[:, start:start + self.config.MAX_OUTPUT_LENGTH]
+        elif signal.shape[1] < self.config.MAX_OUTPUT_LENGTH:
             # Zero-padding
-            pad = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH - signal.shape[1]))
+            pad = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH - signal.shape[1]))
             signal = torch.cat((signal, pad), dim=1)
         return signal
 
@@ -474,6 +490,74 @@ class ECGDataset(Dataset):
             signal = self._standardize_signal_length(signal)
         return signal
 
+def compute_attention_mask_for_padding(self, array):
+        # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+        array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
+        for index in range(array.shape[1]):
+            if np.any(array[:, index]):
+                break
+        start = index
+        for index in range(array.shape[1]-1, -1, -1):
+            if np.any(array[:, index]):
+                break
+        end = index
+        attention_mask = np.zeros(array.shape[1])
+        attention_mask[start:end+1] = 1
+        attention_mask = np.repeat([attention_mask], 12, axis=0)
+        attention_mask = np.concatenate(attention_mask, axis=0)
+        return attention_mask
+
+def compute_beat_based_attention_mask(self, ecg_data):
+    '''
+    Computes attention mask focusing only on P wave, QRS complex and T wave
+    Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+    '''
+
+    ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
+    _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
+    signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
+    signal_dwt['ECG_R_Peaks'] = 0
+    signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
+
+    p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
+    qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
+    t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
+
+    p_starts_stops = p_wave[p_wave != 0].index.tolist()
+    if len(p_starts_stops) % 2 != 0:
+        p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
+    p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
+
+    t_starts_stops = t_wave[t_wave != 0].index.tolist()
+    if len(t_starts_stops) % 2 != 0:
+        t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
+    t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
+
+
+    qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
+    if len(qrs_starts_stops) % 2 != 0:
+        qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
+    qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
+
+    # building the attention mask in order to attend only samples in the p waves
+    for start, stop in p_starts_stops:
+        p_wave.iloc[start : stop] = 1
+
+    # building the attention mask in order to attend only samples in the t waves
+    for start, stop in t_starts_stops:
+        t_wave.iloc[start : stop] = 1
+
+    # building the attention mask in order to attend only samples in the qrs complexes
+    for start, stop in qrs_starts_stops:
+        qrs_complex.iloc[start : stop] = 1
+
+    # global attention mask merging all interest regions
+    attention_mask = (p_wave | t_wave | qrs_complex).tolist()
+    attention_mask = np.repeat([attention_mask], 12, axis=0) # since the leads are temporally aligned, interest regions should be located within the same intervals
+    attention_mask = np.concatenate(attention_mask, axis=0)
+
+    return attention_mask
+
     def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
@@ -486,6 +570,9 @@ class ECGDataset(Dataset):
 
             if len(self.augmentations) > 0:
                 signal = self.augment_signal(signal)
+
+            # Ensure signal has the correct shape
+            signal = signal[:self.config.LEADS, :self.config.MAX_OUTPUT_LENGTH]
 
             if record is not None:
                 if self.extract_label:
@@ -550,17 +637,17 @@ class ECGDataset(Dataset):
             else:
                 # If no record, set metadata to None
                 metadata = None
-            return file_path, idx, signal, label, metadata
+            return signal, file_path, idx, label, metadata
         except Exception as e:
             print(f"Error processing record {idx}: {e}")
-            signal = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH))
+            signal = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH))
             label = torch.zeros(len(self.label_binarizer.classes_))
-            return None, idx, signal, label, None
+            return signal, None, idx, label, None
 
 if __name__ == "__main__":
     # Example usage
     dataset = ECGDataset(
-        config=ECGConfig(),
+        config=Config(),
         data_dir="path/to/data",
         label_binarizer=LabelBinarizer(),
         supervised=True,

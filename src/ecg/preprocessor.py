@@ -19,6 +19,23 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
 
+"""
+Standard filter:
+Resample to 500 Hz
+Bandpass filter between 0.5 and 40 Hz
+50/60 Hz notch filter to remove powerline interference
+trim to 10 seconds -> truncate
+pad with zeros to 10 seconds if needed
+smooth with Savitzky-Golay filter
+detrend the signal
+replace NaNs with zeros
+Peak limiter: remove peaks above 3mV and below -3mV
+Wavelet denoising (db6)
+"""
+
+# in wfdb.processing there is function xqrs_detect that detects QRS complexes, this can be seen as sentences 
+# if we consider the ECG signal as a text and the leads are paragraphs. I.e. we can use this idea to develop an hierarchical model
+
 class ECGSignalProcessor:
     def __init__(self, data, num_channels, channel_length, channel_names, x, fs=500):
 
