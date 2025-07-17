@@ -30,6 +30,8 @@ import re
 import h5py
 import numba
 from scipy.signal import butter, filtfilt, detrend, savgol_filter
+import seaborn as sns
+from matplotlib import pyplot as plt
 
 sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
 
@@ -128,6 +130,8 @@ class ECGDataset(Dataset):
         extract_label: bool=True,
         extract_metadata: bool=True,
         config: Config|Dict|None=None,
+        visualisation: bool=False,
+        output_dir: str='../../output',
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
@@ -155,6 +159,8 @@ class ECGDataset(Dataset):
             else:
                 raise ValueError("Unsupported data source format." \
                 " Must be DataFrame, list of paths, or folder.")
+
+            print(f"First 5 elements of the file_list: {self.file_list[:5]}", flush=True)
 
         if supervised:
             if data_type == 'folder_with_hea':
@@ -204,6 +210,8 @@ class ECGDataset(Dataset):
         self.preprocessing = preprocessing
         self.extract_label = extract_label
         self.extract_metadata = extract_metadata
+        self.visualisation = visualisation
+        self.output_dir = output_dir
 
     def __len__(self):
         return len(self.file_list)
@@ -473,7 +481,20 @@ class ECGDataset(Dataset):
         if 'truncate' in self.preprocessing:
             signal = self._standardize_signal_length(signal)
         return signal
+    
+    @staticmethod
+    def visualize(ts: np.ndarray, file_name: str="ecg"):
+        # plot in one figure
+        fig, ax = plt.subplots(ncols=2, nrows=6, figsize=(18,20))
 
+        for k, _ts in enumerate(ts):
+            i = k // 2
+            j = k %  2
+            ax[i,j].plot(ts[k, :])
+            ax[i,j].set_title(f"Lead {k}")
+        
+        fig.savefig(f'{file_name}.pdf', dpi=300)
+        
     def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
@@ -481,11 +502,17 @@ class ECGDataset(Dataset):
             label = None # not correct if labels are provided
             metadata = None
 
+            if self.visualisation:
+                self.visualize(np.array(signal), file_name=os.path.join(self.output_dir, f'pre_{idx}_ecg.pdf'))
+
             if len(self.preprocessing) > 0:
                 signal = self.preprocess_signal(signal)
 
             if len(self.augmentations) > 0:
                 signal = self.augment_signal(signal)
+
+            if self.visualisation:
+                self.visualize(np.array(signal),  file_name=os.path.join(self.output_dir, f'post_{idx}_ecg.pdf'))
 
             if record is not None:
                 if self.extract_label:

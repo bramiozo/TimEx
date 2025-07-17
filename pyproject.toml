@@ -5,6 +5,10 @@ description = ""
 authors = ["Bram <bramiozo@gmail.com>"]
 license = "GPL-3"
 readme = "README.md"
+packages = [{'include':'timex', 'from': 'src'}]
+
+[project]
+packages = [{'include':'timex', 'from': 'src'}]
 
 [tool.poetry.dependencies]
 pydmd = "^2025.4.1"
@@ -47,7 +51,6 @@ missingno = "^0.5.2"
 umap-learn = "^0.5.7"
 dtwparallel = "^0.9.41"
 transformers = "^4.52.4"
-
 
 [tool.poetry.group.dev.dependencies]
 jupyter = ">=1.1.1"
