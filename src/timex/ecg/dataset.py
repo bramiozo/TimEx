@@ -33,10 +33,9 @@ from scipy.signal import butter, filtfilt, detrend, savgol_filter
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
 
 # move all preprocessing logic like filtering, smoothing and detrending to ecg.preprocessor
-import ecg.preprocessor
+from timex.ecg import preprocessor
 
 from sklearn.preprocessing import label_binarize
 
@@ -101,7 +100,7 @@ class ECGDataset(Dataset):
     """
         ECGDataset class for PhysioNet files
 
-        Uses ecg.preprocessor for the pre-processing.
+        Uses preprocessor for the pre-processing.
 
         This class is focused on the ETL of ECG data.
     """
@@ -132,7 +131,7 @@ class ECGDataset(Dataset):
         extract_metadata: bool=True,
         config: Config|Dict|None=None,
         visualisation: bool=False,
-        output_dir: str='../../output',
+        output_dir: str='',
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
@@ -501,7 +500,8 @@ class ECGDataset(Dataset):
     @staticmethod
     def visualize(ts: np.ndarray, file_name: str="ecg"):
         # plot in one figure
-        fig, ax = plt.subplots(ncols=2, nrows=6, figsize=(18,20))
+        max_rows = ts.shape[0]//2+1
+        fig, ax = plt.subplots(ncols=2, nrows=max_rows, figsize=(18,20))
 
         for k, _ts in enumerate(ts):
             i = k // 2
@@ -511,73 +511,73 @@ class ECGDataset(Dataset):
         
         fig.savefig(f'{file_name}.pdf', dpi=300)
         
-def compute_attention_mask_for_padding(self, array):
-        # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
-        array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
-        for index in range(array.shape[1]):
-            if np.any(array[:, index]):
-                break
-        start = index
-        for index in range(array.shape[1]-1, -1, -1):
-            if np.any(array[:, index]):
-                break
-        end = index
-        attention_mask = np.zeros(array.shape[1])
-        attention_mask[start:end+1] = 1
-        attention_mask = np.repeat([attention_mask], 12, axis=0)
+    def compute_attention_mask_for_padding(self, array):
+            # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+            array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
+            for index in range(array.shape[1]):
+                if np.any(array[:, index]):
+                    break
+            start = index
+            for index in range(array.shape[1]-1, -1, -1):
+                if np.any(array[:, index]):
+                    break
+            end = index
+            attention_mask = np.zeros(array.shape[1])
+            attention_mask[start:end+1] = 1
+            attention_mask = np.repeat([attention_mask], 12, axis=0)
+            attention_mask = np.concatenate(attention_mask, axis=0)
+            return attention_mask
+
+    def compute_beat_based_attention_mask(self, ecg_data):
+        '''
+        Computes attention mask focusing only on P wave, QRS complex and T wave
+        Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+        '''
+
+        ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
+        _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
+        signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
+        signal_dwt['ECG_R_Peaks'] = 0
+        signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
+
+        p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
+        qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
+        t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
+
+        p_starts_stops = p_wave[p_wave != 0].index.tolist()
+        if len(p_starts_stops) % 2 != 0:
+            p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
+        p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
+
+        t_starts_stops = t_wave[t_wave != 0].index.tolist()
+        if len(t_starts_stops) % 2 != 0:
+            t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
+        t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
+
+
+        qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
+        if len(qrs_starts_stops) % 2 != 0:
+            qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
+        qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
+
+        # building the attention mask in order to attend only samples in the p waves
+        for start, stop in p_starts_stops:
+            p_wave.iloc[start : stop] = 1
+
+        # building the attention mask in order to attend only samples in the t waves
+        for start, stop in t_starts_stops:
+            t_wave.iloc[start : stop] = 1
+
+        # building the attention mask in order to attend only samples in the qrs complexes
+        for start, stop in qrs_starts_stops:
+            qrs_complex.iloc[start : stop] = 1
+
+        # global attention mask merging all interest regions
+        attention_mask = (p_wave | t_wave | qrs_complex).tolist()
+        attention_mask = np.repeat([attention_mask], 12, axis=0) # since the leads are temporally aligned, interest regions should be located within the same intervals
         attention_mask = np.concatenate(attention_mask, axis=0)
+
         return attention_mask
-
-def compute_beat_based_attention_mask(self, ecg_data):
-    '''
-    Computes attention mask focusing only on P wave, QRS complex and T wave
-    Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
-    '''
-
-    ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
-    _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
-    signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
-    signal_dwt['ECG_R_Peaks'] = 0
-    signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
-
-    p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
-    qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
-    t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
-
-    p_starts_stops = p_wave[p_wave != 0].index.tolist()
-    if len(p_starts_stops) % 2 != 0:
-        p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
-    p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
-
-    t_starts_stops = t_wave[t_wave != 0].index.tolist()
-    if len(t_starts_stops) % 2 != 0:
-        t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
-    t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
-
-
-    qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
-    if len(qrs_starts_stops) % 2 != 0:
-        qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
-    qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
-
-    # building the attention mask in order to attend only samples in the p waves
-    for start, stop in p_starts_stops:
-        p_wave.iloc[start : stop] = 1
-
-    # building the attention mask in order to attend only samples in the t waves
-    for start, stop in t_starts_stops:
-        t_wave.iloc[start : stop] = 1
-
-    # building the attention mask in order to attend only samples in the qrs complexes
-    for start, stop in qrs_starts_stops:
-        qrs_complex.iloc[start : stop] = 1
-
-    # global attention mask merging all interest regions
-    attention_mask = (p_wave | t_wave | qrs_complex).tolist()
-    attention_mask = np.repeat([attention_mask], 12, axis=0) # since the leads are temporally aligned, interest regions should be located within the same intervals
-    attention_mask = np.concatenate(attention_mask, axis=0)
-
-    return attention_mask
 
     def __getitem__(self, idx:int)-> tuple:
         try:
@@ -587,6 +587,7 @@ def compute_beat_based_attention_mask(self, ecg_data):
             metadata = None
 
             if self.visualisation:
+                print(f"Visualize ts data: {signal.shape}")
                 self.visualize(np.array(signal), file_name=os.path.join(self.output_dir, f'pre_{idx}_ecg.pdf'))
 
             if len(self.preprocessing) > 0:
@@ -666,10 +667,7 @@ def compute_beat_based_attention_mask(self, ecg_data):
                 metadata = None
             return signal, file_path, idx, label, metadata
         except Exception as e:
-            print(f"Error processing record {idx}: {e}")
-            signal = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH))
-            label = torch.zeros(len(self.label_binarizer.classes_))
-            return signal, None, idx, label, None
+            raise ValueError(f"Error processing record {idx}: {e}")
 
 if __name__ == "__main__":
     # Example usage

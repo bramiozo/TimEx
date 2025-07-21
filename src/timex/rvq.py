@@ -20,3 +20,5 @@ class RVQ_denseAE(nn.Module):
 
 class RVQ_cnnAE(nn.Module):
     pass
+
+
