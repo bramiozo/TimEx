@@ -46,23 +46,39 @@ def fit_lmm(spline_basis, y, series_idx, n_series, rng_key,
     re_hat = jnp.mean(post['re'], axis=0)
     mu_hat = (spline_basis @ beta_hat) + re_hat[series_idx]
     resid = y - mu_hat
-    df = pd.DataFrame({'series': series_idx, 'resid2': jnp.square(resid)})
-    rmse = df.groupby('series')['resid2'].mean().pow(0.5)
-    return rmse
+    df = pd.DataFrame({'series': series_idx, 'resid2_plus': jnp.square(resid)*(resid > 0), 
+                       'resid3_neg': jnp.square(resid)*(resid < 0)})
+    rmse_pos = df.groupby('series')['resid2_plus'].mean().pow(0.5)
+    rmse_neg = df.groupby('series')['resid3_neg'].mean().pow(0.5)
+    #rmse_pos = jnp.sqrt(jnp.mean(jnp.square(resid[resid > 0])))
+    #rmse_neg = jnp.sqrt(jnp.mean(jnp.square(resid[resid < 0])))
+
+    return rmse_pos, rmse_neg
 
 # 4. Iterative clustering by goodness-of-fit
 def time_clustering(data, time_col, value_col, series_col,
-                    n=3, spline_df=5, spline_degree=3, rng_seed=0):
+                    n_clusters=4, spline_df=5, spline_degree=3, rng_seed=0):
+    # check if n_clusters is even number
+    assert (n_clusters % 2 == 0), "n_clusters should be even"
+
     clusters = []
     remaining = data.copy()
     rng_key = jax.random.PRNGKey(rng_seed)
     k = 0
-    num_size_cluster = int(remaining[series_col].nunique()/n)
+    num_size_cluster = int(remaining[series_col].nunique()/n_clusters)
     while True:
         series_ids = remaining[series_col].unique()
         n_series = len(series_ids)
+        
         if n_series == 0:
             break
+        
+        if len(clusters)>=n_clusters:
+            # put remaining ids in remainder_cluster
+            print(f"Assigned {n_clusters} clusters, assigning remaning {n_series} series to remainder clusters")
+            clusters.append(list(series_ids))
+            return clusters 
+
         id_map = {sid: i for i, sid in enumerate(series_ids)}
         inv_id_map = {i: sid for i, sid in enumerate(series_ids)}
         remaining['series_idx'] = remaining[series_col].map(id_map)
@@ -72,16 +88,33 @@ def time_clustering(data, time_col, value_col, series_col,
         time_to_idx = {t: i for i, t in enumerate(time_grid)}
         idxs = remaining[time_col].map(time_to_idx).values
         B_obs = B_grid[idxs]
-        rmse = fit_lmm(B_obs, remaining[value_col].to_numpy(),
-                       remaining['series_idx'].to_numpy(), n_series, rng_key)
-        cut = num_size_cluster
-        best_series = rmse.nsmallest(cut).index.tolist()
-        best_rmse = rmse.loc[best_series].max()
 
-        res = [*map(inv_id_map.get, best_series)]
-        clusters.append(res)
-        remaining = remaining[~remaining['series_idx'].isin(best_series)]
-        print(f"# series: {n_series}, RMSE: {best_rmse}")
+        rmse_p, rmse_n = fit_lmm(B_obs, remaining[value_col].to_numpy(),
+                       remaining['series_idx'].to_numpy(), n_series, rng_key)
+        
+        cut = num_size_cluster
+        
+        if rmse_p.shape[0]>0:
+            best_series_p = rmse_p.nsmallest(cut).index.tolist()
+            best_rmse_p = rmse_p.loc[best_series_p].min()
+            res_p = [*map(inv_id_map.get, best_series_p)]      
+            print(f"cl pos: {len(res_p)}")
+            clusters.append(res_p)
+        else:
+            best_series_p = []
+
+        if rmse_n.shape[0]>0:
+            best_series_n = rmse_n.nsmallest(cut).index.tolist()
+            best_rmse_n = rmse_n.loc[best_series_n].min()
+            res_n = [*map(inv_id_map.get, best_series_n)]      
+            print(f"cl neg: {len(res_n)}")
+            clusters.append(res_n)
+        else:
+            best_series_n = []
+
+        remaining = remaining[(~remaining['series_idx'].isin(best_series_n)) 
+                            & (~remaining['series_idx'].isin(best_series_p))]
+        print(f"# series: {n_series}, remaining: {remaining[series_col].nunique()}, RMSE_p: {best_rmse_p}, RMSE_n: {best_rmse_n}")
 
         k += 1
     return clusters
@@ -91,7 +124,7 @@ def time_clustering(data, time_col, value_col, series_col,
 if __name__ == "__main__":
     onp.random.seed(0)
     # Parameters
-    n_groups = 3
+    n_groups = 4
     series_per_group = 25
     n_time = 50
     noise_std = 0.1
@@ -126,7 +159,7 @@ if __name__ == "__main__":
     
     
     # Run clustering
-    clusters = time_clustering(df, 'time', 'value', 'id', n=3, spline_df=6, spline_degree=3)
+    clusters = time_clustering(df, 'time', 'value', 'id', n_clusters=n_groups, spline_df=6, spline_degree=3)
     # Map series to predicted cluster index
     pred_labels = {}
     for cluster_idx, group in enumerate(clusters):
@@ -140,7 +173,7 @@ if __name__ == "__main__":
     print(f"Adjusted Mutual Information: {ami:.3f}")
 
     cmap_ = plt.get_cmap('tab10', n_groups)
-    cluster_colors = {c: cmap_(c) for c in range(n_groups)}
+    cluster_colors = {c: cmap_(c) for c in range(len(clusters))}
 
     fig, axes = plt.subplots(nrows=2, figsize=(17, 10))
     # Plot 1: colored by true series
