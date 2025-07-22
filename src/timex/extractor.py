@@ -296,7 +296,7 @@ class Extractor:
 
             peak_and_valleys, time_peak_and_val = time_function(extract_peaks_and_valleys)(ts_data, N=5)
 
-            _spline_params, time_splines = time_function(spline_params(ts_data, weighted=True, max_params=10))
+            _spline_params, time_splines = time_function(spline_params)(ts_data, weighted=True, max_params=10)
 
 
             self.duration_dict['time_mean'] += time_mean
