@@ -4,6 +4,7 @@ import logging
 import joblib
 import scipy.stats
 
+from scipy import interpolate
 from scipy.stats import skew, kurtosis, entropy as _entropy, linregress, median_abs_deviation
 from scipy.fft import rfft, rfftfreq, dct
 from scipy.signal import periodogram, welch, find_peaks
@@ -49,7 +50,7 @@ import nolds
 
 from fastdtw import fastdtw
 
-import wavelets
+from timex import wavelets
 #TODO: add interpretable feature mappings 
 # e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}} 
     
@@ -295,6 +296,9 @@ class Extractor:
 
             peak_and_valleys, time_peak_and_val = time_function(extract_peaks_and_valleys)(ts_data, N=5)
 
+            _spline_params, time_splines = time_function(spline_params(ts_data, weighted=True, max_params=10))
+
+
             self.duration_dict['time_mean'] += time_mean
             self.duration_dict['time_min'] += time_min
             self.duration_dict['time_max'] += time_max
@@ -325,6 +329,7 @@ class Extractor:
             self.duration_dict['time_fourcoeffs'] += time_fourcoeffs
             self.duration_dict['time_wavelet_coeffs'] += time_wavelet_coeffs
             self.duration_dict['time_peak_and_val'] += time_peak_and_val
+            self.duration_dict['time_spline'] += time_splines
 
             # Store the features for the current ID
             res_dict = {
@@ -368,6 +373,7 @@ class Extractor:
             res_dict.update(wavelet_coeffs)
             res_dict.update(peak_and_valleys)
             res_dict.update(wavelet_transform_feature)
+            res_dict.update(_spline_params)
 
             self.features[_id] = res_dict
         self.duration_dict = {k:v/num_series for k,v in self.duration_dict.items()}
@@ -2834,3 +2840,37 @@ def extract_fft_features(y, x=None, num_features=5, max_frequency=40):
     # Create and return the feature dictionary
     return dict(zip(feature_keys, all_features))
 
+
+def spline_params(y, monotonic=True, weighted=True, max_params = 20):
+    TF = 10
+    pseudo_time = np.arange(0, len(y),1)
+    if monotonic:
+        interp = interpolate.PchipInterpolator(pseudo_time, y, extrapolate=False)
+    else:
+        interp = interpolate.Akima1DInterpolator(pseudo_time, y, extrapolate=False)
+
+    _roots  = interp.roots()
+    _derivs = interp._find_derivatives(pseudo_time, y)
+
+    if weighted:
+        weights = np.ones(len(_derivs)) + TF*pseudo_time
+    else:
+        weights = np.ones(len(_derivs))
+
+    if max(len(_roots), len(_derivs)) > max_params:
+        step_r = max(len(_roots)//max_params, 1)
+        step_d = max(len(_derivs)//max_params, 1)
+
+        d = {f'root_{i}': _root for i, _root in enumerate(_roots)
+              if i%step_r==0}
+        d.update({
+            f'deriv_{i}': _deriv*weights[i] for i, _deriv in enumerate(_derivs)
+              if i%step_d==0
+        })
+    else:
+        d = {f'root_{i}': _root for i, _root in enumerate(_roots)}
+        d.update({
+            f'deriv_{i}': _deriv*weights[i] for i, _deriv in enumerate(_derivs)
+        })
+
+    return d
