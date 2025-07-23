@@ -5,6 +5,7 @@ import joblib
 import scipy.stats
 
 from scipy import interpolate
+
 from scipy.stats import skew, kurtosis, entropy as _entropy, linregress, median_abs_deviation
 from scipy.fft import rfft, rfftfreq, dct
 from scipy.signal import periodogram, welch, find_peaks
@@ -51,6 +52,7 @@ import nolds
 from fastdtw import fastdtw
 
 from timex import wavelets
+
 #TODO: add interpretable feature mappings 
 # e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}} 
     
@@ -299,6 +301,7 @@ class Extractor:
             _spline_params, time_splines = time_function(spline_params)(ts_data, weighted=True, max_params=10)
 
 
+
             self.duration_dict['time_mean'] += time_mean
             self.duration_dict['time_min'] += time_min
             self.duration_dict['time_max'] += time_max
@@ -374,6 +377,7 @@ class Extractor:
             res_dict.update(peak_and_valleys)
             res_dict.update(wavelet_transform_feature)
             res_dict.update(_spline_params)
+
 
             self.features[_id] = res_dict
         self.duration_dict = {k:v/num_series for k,v in self.duration_dict.items()}
@@ -2840,7 +2844,6 @@ def extract_fft_features(y, x=None, num_features=5, max_frequency=40):
     # Create and return the feature dictionary
     return dict(zip(feature_keys, all_features))
 
-
 def spline_params(y, monotonic=True, weighted=True, max_params = 20):
     TF = 10
     pseudo_time = np.arange(0, len(y),1)
@@ -2874,3 +2877,4 @@ def spline_params(y, monotonic=True, weighted=True, max_params = 20):
         })
 
     return d
+
