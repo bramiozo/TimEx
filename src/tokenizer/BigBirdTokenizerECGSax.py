@@ -2,10 +2,9 @@ import os
 from shutil import copyfile
 from typing import List, Optional, Tuple
 
-from transformers import PreTrainedTokenizer
 from transformers.PreTrainedTokenizer import added_token as AddedToken
 from typing import Any, Dict
-from src.tokenizer.tokenizer import ECGTokenizer
+from src.tokenizer.sax import ECGTokenizer
 
 import logging
 
@@ -30,6 +29,9 @@ PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
 class BigBirdTokenizerECG(PreTrainedTokenizer):
     """
     Construct a BigBird tokenizer. Based on a custom ECG symbolizer
+
+    The major assumption is that the ECG signals are already pre-processed according to the
+    ecg.preprocessor defaults. For model training and finetuning is facilitated in the custom dataset class.
 
     This tokenizer inherits from :class:`~transformers.PreTrainedTokenizer` which contains most of the main methods.
     Users should refer to this superclass for more information regarding those methods.

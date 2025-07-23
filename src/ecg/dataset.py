@@ -1,5 +1,6 @@
+from site import USER_BASE
 # Complete implementation using neurokit2, scipy, catch22, tsfresh
-from typing import Literal, Dict, List, Annotated, Optional, Sequence
+from typing import Literal, Dict, List, Annotated, Optional, Sequence, Union, Tuple
 from numpy import ndarray, concatenate
 import numpy as np
 
@@ -31,17 +32,27 @@ import numba
 from scipy.signal import butter, filtfilt, detrend, savgol_filter
 
 sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
-import extractor
-import wavelets
+
+# move all preprocessing logic like filtering, smoothing and detrending to ecg.preprocessor
+import ecg.preprocessor
+
+from sklearn.preprocessing import label_binarize
+
+# add logging
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.info("Initializing Config class")
 
 class Config:
     # Data settings
     LEADS = 12
-    INPUT_LENGTH = 5_000
+    INPUT_LENGTH = 10_000
     TRAIN_SIZE = 0.8
     VAL_SIZE = 0.1
     RANDOM_SEED = 42
     SAMPLING_RATE = 500
+
+    MAX_OUTPUT_LENGTH = 5_000  # Maximum length of the output signal after re-sampling
 
     # Training settings
     BATCH_SIZE = 32
@@ -64,9 +75,35 @@ class Config:
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
+
+# TODO: the pre-processing should be off-loaded to the ecg.preprocessor class
+# TODO: add class weights as an attribute
+
+def check_if_var_is_list_of_str_or_int(var: List[str|int])-> Tuple[bool,bool]:
+    if not isinstance(var, list):
+        raise TypeError(f"Expected a list, got {type(var)}")
+    # Check if all items are the same type (all str or all int)
+    if not var:  # empty list case
+        return True
+
+    first_type = type(var[0])
+    if first_type not in (str, int):
+        raise TypeError(f"Expected a list of strings or integers, got {first_type}")
+
+    for item in var:
+        if type(item) != first_type:
+            raise TypeError(f"Expected a list of only {first_type.__name__}s, but found mixed types")
+
+    list_of_strings = isinstance(var[0], str)
+    return True, list_of_strings
+
 class ECGDataset(Dataset):
     """
         ECGDataset class for PhysioNet files
+
+        Uses ecg.preprocessor for the pre-processing.
+
+        This class is focused on the ETL of ECG data.
     """
 
     re_diagnosis = re.compile(r'(Dx|Diagnosis):\s?([0-9A-z,]+)', re.IGNORECASE)
@@ -79,38 +116,88 @@ class ECGDataset(Dataset):
     re_meds = re.compile(r'Rx:\s?(\w+)', re.IGNORECASE)
 
     def __init__(self,
-        df,
-        label_binarizer,
-        is_train=True,
-        supervised=False,
-        extract_label=True,
-        extract_metadata=True,
-        config=None,
+        data: Union[List[str],List[Tuple[str,int]], str],
+        data_type: Literal['folder_with_npy',
+                           'folder_with_hea',
+                           'folder_with_xml',
+                           'folder_with_hdf5',
+                           'list_of_filenames',
+                           'list_of_filename_label_tuples',
+                           'tsv_with_filenames_labels']='folder_with_hea',
+        labels: Union[List[str|int],str, None]=None,
+        label_binarizer: Optional[object] = None,
+        is_train: bool=True,
+        supervised: bool=False,
+        extract_label: bool=True,
+        extract_metadata: bool=True,
+        config: Config|Dict|None=None,
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
                                      = ['bandpass', 'resampler', 'detrend']
         ):
 
-        if isinstance(df, pd.DataFrame):
-            self.df = df
+        if data_type not in ['folder_with_hea', 'folder_with_npy']:
+            raise ValueError(f"Unsupported data type: {data_type}. Must be one of ['folder_with_hea', 'folder_with_npy']. Others options are work in progress.")
 
-            assert 'file_name' in df.columns, "The DataFrame must contain a 'file_name' column, referring to the .hea files"
-            if (supervised) and ('label' not in df.columns) and (not extract_label):
-                raise ValueError("The DataFrame must contain a 'label' column for supervised learning.")
+        if data_type in ['folder_with_npy', 'folder_with_hea']:
+            if isinstance(data, list):
+                # TODO: assert is list of strings
+                _, list_of_str = check_if_var_is_list_of_str_or_int(data)
+                assert(list_of_str), "Data must be a list of strings (filepaths to hea/npy) or a string (folder with hea/npy)"
+                self.file_list = data
+            elif isinstance(data, str) and os.path.isdir(data):
+                self.file_list = []
+                for root, _, files in os.walk(data):
+                    for file in files:
+                        if file.endswith(('.hea')):
+                            self.file_list.append(os.path.join(root, file))
 
-            self.file_list = df['file_name'].tolist()
-        elif isinstance(df, list):
-            self.file_list = df
-        elif isinstance(df, str) and os.path.isdir(df):
-            self.file_list = []
-            for root, _, files in os.walk(df):
-                for file in files:
-                    if file.endswith(('.hea', '.npy', '.h5')):
-                        self.file_list.append(os.path.join(root, file))
+                        if file.endswith(('.npy')):
+                            self.file_list.append(os.path.join(root, file))
+            else:
+                raise ValueError("Unsupported data source format." \
+                " Must be DataFrame, list of paths, or folder.")
+
+        if supervised:
+            if data_type == 'folder_with_hea':
+                logging.info("Assuming folder with HEA files, assumption is that labels are part of HEA metadata")
+                self.labels = labels
+            elif data_type == 'folder_with_npy':
+                logging.info("Assuming folder with NPY files, assumption is that labels are added seperately")
+                if labels is None:
+                    raise ValueError("Labels must be provided when using folder_with_npy data type")
+                elif isinstance(labels, str):
+                    # could be NPY file, could be a TXT file, could be a TSV
+                    if labels.endswith('.npy'):
+                        self.labels = list(np.load(labels))
+                    elif labels.endswith('.txt'):
+                        self.labels = list(np.loadtxt(labels, dtype=str))
+                    elif labels.endswith('.tsv'):
+                        data_labels = np.loadtxt(labels, dtype=str, delimiter='\t')
+                        self.labels = list(data_labels[:, 1])
+                        self.file_list = list(data_labels[:, 0])
+
+                    assert(len(self.labels) == len(self.file_list)), f"Number of labels must match number of samples: {len(self.labels)}/{len(self.file_list)}"
+
+                elif check_if_var_is_list_of_str_or_int(labels)[0]:
+                    # list of str: assume the str's are labels, give warning about this
+                    # list of int: assume the int's are labels, give warning about this
+                    # assumption for both: ordering is the same as the list of samples
+                    raise UserWarning("Assumption: You are passing a list of str/int as labels")
+
+                    assert(len(labels) == len(self.file_list)), f"Number of labels must match number of samples: {len(self.labels)}/{len(self.file_list)}"
+
+                    self.labels = labels
+
+        if hasattr(self, 'labels') and self.labels is not None:
+            unique_labels = list(set(self.labels)) if isinstance(self.labels, list) else None
+            print(f"Unique labels are: {unique_labels}")
         else:
-            raise ValueError("Unsupported data source format." \
-            " Must be DataFrame, list of paths, or folder.")
+            print("No labels available to show unique values")
+
+        if supervised is False:
+            extract_label = False
 
         if supervised is False:
             extract_label = False
@@ -133,6 +220,7 @@ class ECGDataset(Dataset):
         - WFDB (.hea + .dat)
         - HDF5 (.h5)
         - NumPy (.npy)
+        - TODO: XML(with.. lists?) see https://github.com/DFNOsorio/GEMuseXMLReader/blob/master/GEMuseXMLReader.py
         - Folder structure (directory of .npy or .txt files)
         """
         if isinstance(source, str) and source.endswith('.npy'):
@@ -177,6 +265,21 @@ class ECGDataset(Dataset):
             raise ValueError(f"Unsupported input source: {source}")
 
         return torch.tensor(signal, dtype=torch.float32), comment
+
+    def compute_weights(self):
+        #logger.info("Computing weights...")
+        if len(self.diagnoses_cols) > 1:
+            weights = []
+            for label in self.diagnoses_cols:
+                count = self.ecg_dataframe[label].sum()
+                weight = (self.ecg_dataframe.__len__() - count) / (count + 1e-9)
+                weights.append(weight)
+        else:
+            num_labels = self.ecg_dataframe[self.diagnoses_cols[0]].max() + 1
+            weights = num_labels / self.ecg_dataframe[self.diagnoses_cols].value_counts()
+            weights = weights.values.tolist()
+        #logger.info("Done with the weights.")
+        return torch.FloatTensor(weights)
 
 
     def augment_signal(self, signal):
@@ -338,13 +441,13 @@ class ECGDataset(Dataset):
         signal = torch.clamp(signal, -5.0, 5.0)
 
     def _standardize_signal_length(self, signal):
-        if signal.shape[1] > self.config.INPUT_LENGTH:
+        if signal.shape[1] > self.config.MAX_OUTPUT_LENGTH:
             # Center crop
-            start = (signal.shape[1] - self.config.INPUT_LENGTH)
-            signal = signal[:, start:start + self.config.INPUT_LENGTH]
-        elif signal.shape[1] < self.config.INPUT_LENGTH:
+            start = (signal.shape[1] - self.config.MAX_OUTPUT_LENGTH)
+            signal = signal[:, start:start + self.config.MAX_OUTPUT_LENGTH]
+        elif signal.shape[1] < self.config.MAX_OUTPUT_LENGTH:
             # Zero-padding
-            pad = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH - signal.shape[1]))
+            pad = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH - signal.shape[1]))
             signal = torch.cat((signal, pad), dim=1)
         return signal
 
@@ -352,8 +455,6 @@ class ECGDataset(Dataset):
         """
         Remove linear trend from each lead (channel).
 
-        Args:label_binarizer
-            Detrended signal of the same shape.
         """
         if isinstance(signal, torch.Tensor):
             signal_np = signal.numpy()
@@ -394,11 +495,79 @@ class ECGDataset(Dataset):
             signal = self._standardize_signal_length(signal)
         return signal
 
+def compute_attention_mask_for_padding(self, array):
+        # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+        array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
+        for index in range(array.shape[1]):
+            if np.any(array[:, index]):
+                break
+        start = index
+        for index in range(array.shape[1]-1, -1, -1):
+            if np.any(array[:, index]):
+                break
+        end = index
+        attention_mask = np.zeros(array.shape[1])
+        attention_mask[start:end+1] = 1
+        attention_mask = np.repeat([attention_mask], 12, axis=0)
+        attention_mask = np.concatenate(attention_mask, axis=0)
+        return attention_mask
+
+def compute_beat_based_attention_mask(self, ecg_data):
+    '''
+    Computes attention mask focusing only on P wave, QRS complex and T wave
+    Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+    '''
+
+    ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
+    _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
+    signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
+    signal_dwt['ECG_R_Peaks'] = 0
+    signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
+
+    p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
+    qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
+    t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
+
+    p_starts_stops = p_wave[p_wave != 0].index.tolist()
+    if len(p_starts_stops) % 2 != 0:
+        p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
+    p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
+
+    t_starts_stops = t_wave[t_wave != 0].index.tolist()
+    if len(t_starts_stops) % 2 != 0:
+        t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
+    t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
+
+
+    qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
+    if len(qrs_starts_stops) % 2 != 0:
+        qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
+    qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
+
+    # building the attention mask in order to attend only samples in the p waves
+    for start, stop in p_starts_stops:
+        p_wave.iloc[start : stop] = 1
+
+    # building the attention mask in order to attend only samples in the t waves
+    for start, stop in t_starts_stops:
+        t_wave.iloc[start : stop] = 1
+
+    # building the attention mask in order to attend only samples in the qrs complexes
+    for start, stop in qrs_starts_stops:
+        qrs_complex.iloc[start : stop] = 1
+
+    # global attention mask merging all interest regions
+    attention_mask = (p_wave | t_wave | qrs_complex).tolist()
+    attention_mask = np.repeat([attention_mask], 12, axis=0) # since the leads are temporally aligned, interest regions should be located within the same intervals
+    attention_mask = np.concatenate(attention_mask, axis=0)
+
+    return attention_mask
+
     def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
             signal, record = self._load_signal_from_source(file_path)
-            label = None
+            label = None # not correct if labels are provided
             metadata = None
 
             if len(self.preprocessing) > 0:
@@ -406,6 +575,9 @@ class ECGDataset(Dataset):
 
             if len(self.augmentations) > 0:
                 signal = self.augment_signal(signal)
+
+            # Ensure signal has the correct shape
+            signal = signal[:self.config.LEADS, :self.config.MAX_OUTPUT_LENGTH]
 
             if record is not None:
                 if self.extract_label:
@@ -470,9 +642,20 @@ class ECGDataset(Dataset):
             else:
                 # If no record, set metadata to None
                 metadata = None
-            return file_path, idx, signal, label, metadata
+            return signal, file_path, idx, label, metadata
         except Exception as e:
             print(f"Error processing record {idx}: {e}")
-            signal = torch.zeros((self.config.LEADS, self.config.INPUT_LENGTH))
+            signal = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH))
             label = torch.zeros(len(self.label_binarizer.classes_))
-            return None, idx, signal, label, None
+            return signal, None, idx, label, None
+
+if __name__ == "__main__":
+    # Example usage
+    dataset = ECGDataset(
+        config=Config(),
+        data_dir="path/to/data",
+        label_binarizer=LabelBinarizer(),
+        supervised=True,
+        extract_label=True
+    )
+    print(dataset[0])
