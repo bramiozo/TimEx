@@ -51,6 +51,7 @@ class Config:
     VAL_SIZE = 0.1
     RANDOM_SEED = 42
     SAMPLING_RATE = 500
+
     MAX_OUTPUT_LENGTH = 5_000  # Maximum length of the output signal after re-sampling
 
     # Training settings
@@ -73,6 +74,7 @@ class Config:
     AMPLITUDE_SCALE_RANGE = (0.7, 1.2)
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
+
 
 # TODO: the pre-processing should be off-loaded to the ecg.preprocessor class
 # TODO: add class weights as an attribute
@@ -193,6 +195,9 @@ class ECGDataset(Dataset):
             print(f"Unique labels are: {unique_labels}")
         else:
             print("No labels available to show unique values")
+
+        if supervised is False:
+            extract_label = False
 
         if supervised is False:
             extract_label = False
