@@ -65,12 +65,12 @@ import wavelets
 # add Cesium features
 DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
                           "median_absolute_deviation", "percent_close_to_median",
-                          "weighted_average", "all_times_nhist_numpeaks", 
+                          "weighted_average", "all_times_nhist_numpeaks", "max_slope",
                           "all_times_nhist_peak_1_to_2", "all_times_nhist_peak_val",
-                          "avg_double_to_single_step", "avg_err", "avgt",
-                          "anderson_darling",  "shapiro_wilk"]
+                          "avg_err", "avgt",  "stetson_k",
+                          "anderson_darling",  "shapiro_wilk"] # avg_double_to_single_step
 
-ANTROPY_FEATURES = ["perm_entropy", "spectral_entropy",
+ANTROPY_FEATURES = ["perm_entropy", "spectral_entropy", 
                     "svd_entropy", "app_entropy", "sample_entropy",
                     "lziv_complexity", "num_zerocross",
                     "hjorth_params", "petrosian_fd",  "katz_fd",
@@ -125,6 +125,7 @@ def get_crossectional(tsdf: pd.DataFrame,
 
     ResDict = {}
     if custom_features == True:
+        print(f"Processing custom features..", flush=True)
         CustomExtractor = Extractor()
         CustomExtractor.fit(tsdf,
                             id_col=id_col,
@@ -135,6 +136,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['custom'] = ts_data_agg_custom.set_index('id')
 
     if tsfresh_features ==True:
+        print(f"Processing Fresh features..", flush=True)
         FreshExtractor = TsFreshExtractor()
         FreshExtractor.fit(tsdf, 
                             id_col=id_col, 
@@ -145,6 +147,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['tsfresh'] = ts_data_agg_fresh
 
     if catch22_features==True:
+        print(f"Processing catch22 features..", flush=True)
         Catch22Extract  = Catch22Extractor()
         Catch22Extract.fit(tsdf, 
                     id_col=id_col, 
@@ -155,6 +158,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['catch22'] = ts_data_agg_catch22
 
     if cesium_features==True:
+        print(f"Processing cesium features..", flush=True)
         CesiumExtract = CesiumExtractor()
         CesiumExtract.fit(tsdf, 
                             id_col=id_col, 
@@ -165,6 +169,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['cesium'] = ts_data_agg_cesium
     
     if antropy_features==True:
+        print(f"Processing Antropy features..", flush=True)
         AntropyExtract = AntropyExtractor()
         AntropyExtract.fit(tsdf, 
                             id_col=id_col, 
@@ -175,6 +180,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['antropy'] = ts_data_agg_antropy
     
     if nolds_features==True:
+        print(f"Processing Nolds features..", flush=True)
         NoldsExtract = NoldsExtractor()
         NoldsExtract.fit(tsdf, 
                             id_col=id_col, 
@@ -185,6 +191,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['nolds'] = ts_data_agg_nolds
 
     if katz_features==True:
+        print(f"Processing Katz features..", flush=True)
         KatzExtract = KatzExtractor()
         KatzExtract.fit(tsdf,
                             id_col=id_col,
@@ -195,6 +202,7 @@ def get_crossectional(tsdf: pd.DataFrame,
         ResDict['katz'] = ts_data_agg_katz
 
     if tsfel_features==True:
+        print(f"Processing tsfel features..", flush=True)
         TSfelExtract = TSFelExtractor()
         TSfelExtract.fit(tsdf,
                             id_col=id_col,
@@ -207,8 +215,13 @@ def get_crossectional(tsdf: pd.DataFrame,
     # merge
     iterator = iter(ResDict.items())
     k, final = next(iterator)
-    final.columns = [f'{c}_{k}' for c in final.columns]
+    final.columns = [f'{c}_0' for c in final.columns]
+    if len(final.columns) != len(set(final.columns)):
+        raise ValueError(f"Duplicate columns in {final.columns}")
+    
     for k, df in iterator:
+        if len(final.columns) != len(set(final.columns)):
+            raise ValueError(f"Duplicate columns in {final.columns}")    
         final = final.join(df, how='inner', rsuffix='_'+k)
 
     return final, DURATIONS
@@ -432,6 +445,7 @@ class CesiumExtractor:
             self.features_to_use += ["cad_probs_10", "cad_probs_30", "cad_probs_100", 
                                      "cad_probs_500", "cads_avg"]
 
+        self.features_to_use = list(set(self.features_to_use))
     def fit(self, df, id_col='id', val_col='value', time_col='dt'):
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
@@ -446,6 +460,8 @@ class CesiumExtractor:
                                             features_to_use=self.features_to_use,
                                             )
             feats.columns = feats.columns.droplevel(-1)
+            if len(feats.columns) != len(set(feats.columns)):
+                raise  ValueError(f"The are duplicate columns in {feats.columns}")
             feats_dict = feats.to_dict()
             _features[_id] = {k:v[0] for k,v in feats_dict.items()}
             self.duration_dict['total'] += time_total
@@ -547,14 +563,13 @@ class NoldsExtractor:
                     v_ = np.tile(ts_data, min_len//ts_data.shape[0] + 1)
                 else:
                     v_ = ts_data       
-                _res, time_lyap = time_function(nolds.lyap_e(v_))
+                _res, time_lyap = time_function(nolds.lyap_e)(v_)
                 for nd, res_ in enumerate(_res):
                     res[f'lyap_e_{nd}'] = res_
                 self.duration_dict['lyap'] += time_lyap
             elif f == 'corr_dim':
                 for edim in self.emb_dims:
-                    res[f'corr_dim_{edim}'], time_corr = (
-                        time_function(nolds.corr_dim(ts_data, emb_dim=edim)))
+                    res[f'corr_dim_{edim}'], time_corr = time_function(nolds.corr_dim)(ts_data, emb_dim=edim)
                     self.duration_dict[f'corr_dim_{edim}'] += time_corr
         return res
     
