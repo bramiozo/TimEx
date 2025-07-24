@@ -46,6 +46,7 @@ class Config:
     VAL_SIZE = 0.1
     RANDOM_SEED = 42
     SAMPLING_RATE = 500
+
     MAX_OUTPUT_LENGTH = 5_000  # Maximum length of the output signal after re-sampling
 
     # Training settings
@@ -94,8 +95,6 @@ class ECGDataset(Dataset):
     """
         ECGDataset class for PhysioNet files
 
-        Uses preprocessor for the pre-processing.
-
         This class is focused on the ETL of ECG data.
     """
 
@@ -130,6 +129,7 @@ class ECGDataset(Dataset):
         config: Config|Dict|None=None,
         visualisation: bool=False,
         output_dir: str='',
+
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
@@ -462,6 +462,7 @@ class ECGDataset(Dataset):
 
         return attention_mask
 
+
     def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
@@ -472,6 +473,7 @@ class ECGDataset(Dataset):
             if self.visualisation:
                 print(f"Visualize first 6 channels ts data: {signal.shape}")
                 self.visualize(np.array(signal)[:6,:], file_name=os.path.join(self.output_dir, f'pre_{idx}_ecg.pdf'))
+
 
             if len(self.preprocessing) > 0:
                 signal = self.preprocess_signal(signal)
@@ -555,6 +557,7 @@ class ECGDataset(Dataset):
             return signal, file_path, idx, label, metadata
         except Exception as e:
             raise ValueError(f"Error processing record {idx}: {e}")
+
 
 if __name__ == "__main__":
     # Example usage
