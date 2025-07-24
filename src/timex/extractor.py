@@ -624,11 +624,17 @@ class KatzExtractor:
             'stl_features': get_stl_features,
             'acfpacf_features': get_acfpacf_features,
             'flat_spots': get_flat_spots,
-            'unitroot_kpss': get_unitroot_kpss,
+            #'unitroot_kpss': get_unitroot_kpss,
             'holt_params': get_holt_params,
         }
 
         res = {}
+        name_dict = {
+            'acfpacf_features': ['pacf5', 'diff1y_pacf5', 'diff2y_pacf5', 'seas_pacf1'],
+            'stl_features': ["var_trend", "var_res", "trend_strength", "seasonality_strength",
+                              "spikiness", "peak", "trough"],
+            'holt_params': ["holt_alpha", "holt_beta"]
+        }
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
@@ -636,13 +642,13 @@ class KatzExtractor:
                     result, time_elapsed = time_function(fun)(ts_data)
                 except Exception as e:
                     # TODO: this is problematic because we don't carry the keys of results that are dictionaries
-                    result, time_elapsed = np.nan, np.nan
-                    # if f in ['stl_features', 'acfpacf_features', 'holt_params']:
-                    #   result = {..}
-                    #print(f'Error: {e}. Fun: {f}')
+                    if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+                        result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
+                    else:
+                        result, time_elapsed = np.nan, np.nan
+
 
                 if f in ['stl_features', 'acfpacf_features', 'holt_params']:
-
                     res.update(result)
                 else:
                     res[f] = result
@@ -675,6 +681,8 @@ class TSFelExtractor:
             else TSFEL_FEATURES
         self.features = None
         self.duration_dict = defaultdict(float)
+
+        
     def tsfelfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
             'positive_turning': positive_turning,
@@ -708,6 +716,9 @@ class TSFelExtractor:
             'lpcc': lpcc
         }
         res = {}
+        name_dict = {
+            '': []
+        }
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
@@ -715,7 +726,11 @@ class TSFelExtractor:
                     # TODO: fix more gracefully
                     result, time_elapsed = time_function(fun)(ts_data)
                 except:
-                    result, time_elapsed = np.nan, np.nan
+                    if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
+                         'wavelet_energy', 'mfcc', 'lpcc']:
+                        result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
+                    else:
+                        result, time_elapsed = np.nan, np.nan
                 if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
                          'wavelet_energy', 'mfcc', 'lpcc']:
                     res.update(result)
@@ -1336,11 +1351,11 @@ def get_acfpacf_features(
         "seas_pacf1": np.nan,
     }
     if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
-        msg = (
-            "Length is shorter than period, or constant time series, "
-            "unable to calculate acf/pacf features"
-        )
-        logging.error(msg)
+        #msg = (
+        #    "Length is shorter than period, or constant time series, "
+        #    "unable to calculate acf/pacf features"
+        #)
+        #logging.error(msg)
         return acfpacf_features
 
     nlag = min(acfpacf_lag, len(x) - 2)
@@ -1411,11 +1426,11 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
     """
 
     if len(x) <= nbins:
-        msg = (
-            "Length of time series is shorter than nbins, unable to "
-            "calculate flat spots feature"
-        )
-        logging.error(msg)
+        #msg = (
+        #    "Length of time series is shorter than nbins, unable to "
+        #    "calculate flat spots feature"
+        #)
+        #logging.error(msg)
         return np.nan
 
     max_run_length = 0
