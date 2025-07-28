@@ -53,9 +53,6 @@ class ECGSignalProcessor:
         self.peaks = None
         self.dips = None
 
-    # add augmentation
-    #
-
     def plot_signals(self):
         fig, axes = plt.subplots(nrows=self.n_sig, ncols=1, figsize=(18, 35))
         for i in range(self.n_sig):
