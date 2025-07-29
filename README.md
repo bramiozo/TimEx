@@ -122,6 +122,9 @@ It is relatively easy to come up with greedy algorithms to find the best separat
    
 **Algorithm timex-cluster-2**
 
+1. **Model**; regress a model on all series
+2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors
+3. **Model**; 
 
 # Acknowledgments
 
