@@ -1,5 +1,5 @@
 # TimEx
-Repository for extracting time-series features and clusters. This library is not meant for end-to-end timeseries-classification.
+Repository for extracting time-series features and clusters for heterogeneous multivariate data. This library is not meant for end-to-end timeseries-classification or segmentation.
 
 # **Standardisation**
 
@@ -39,31 +39,36 @@ TS_smoothed = smoother.fit_transform(TS_data)
 
 # **Detrending**
 
+```python
+
+from timex import ts_detrender
+
+detrender = ts_detrender(unit='days')
+TS_detrended = detrender.fit_transform(TS_data)
+```
 
 
 # **Crossectional feature extraction** (CFE)
-Using features  from
+
+Using features from
 * catch22
 * tsfresh
 * kats
 * antropy
 * nolds
 * cesium
+* tsfel
+* tsflex
 * CNN/RNN based bottlenecks
 * LLM-based bottlenecks??
-* Custom functions:
-  * Added:
-  * wavelet
-  * FFT
-  * Mann-Kendall
+* Custom functions: including custom shapelets
 * Neurokit2 for EEG/ECG preprocessing
  
-*TODO:*  use tsflex to improve performance of feature  extraction.
-
 # **Timeseries distance matrices** (TDM):
 Using 
 * tslearn
 * sktime
+* aeon
 * Custom:
   * log rank
   * distance correlation
@@ -71,33 +76,66 @@ Using
 
 # Direct sparse coding of timeseries (DSC)
 
-```timeseries -> low-ranking representation with SAEs```
 
 
-# Cluster
-```CFE/TDM/DSC -> clustering```
+# Clustering
+
+## CFE/TDM/DSC -> clustering
+
+Clustering follows the extraction of a distance matrix, either directly created using ```timex.tdm``` methods (i.e. a clustering algorithm with a pre-computed distance matrix), or 
+
+As clustering methods following CFE, TDM or DSC we have 
+
+* [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
+* Sklearn clustering methods: OPTICS, k-means
+* k-Medoids; PAM, CLARANS, etc.
+* k-Median; basically rank-based k-means
+* HDBSCAN
+
+## Latent class modeling
+
+GBTM, GMM
 
 ## TS specific
+
 * [MPF](https://matrixprofile.docs.matrixprofile.org/examples/Hierarchical_Clustering_Accelerometer_Walk_Stand_etc.html)
 * [TiCC](https://github.com/davidhallac/TICC)
 * dtwclust
 * [LCMM](https://cran.r-project.org/web/packages/lcmm/lcmm.pdf)
-
-## Cross-sectional
-* [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
-* Sklearn clustering methods
-* HDBSCAN
+* Aeon - clustering methods
+* TScluster - clustering methods
 
 
+## Greedy
 
-# Examples
-https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
+It is relatively easy to come up with greedy algorithms to find the best separation of timeseries; for example
 
+**Algorithm timex-cluster-1**
+
+1. **Init**; randomly select $P$ timeseries (which should be small fraction of the total); determine the $K$ exemplars/groups using MSM (or DTW etc.) and e.g. Affinity Propagation
+2. **Model**; regress a model on each group.
+3. **Expand**; expand each group by taking the top-$N$ matches with the model
+* Repeat 2->3->2->3 until the number of series is exhausted
+4. **Remix**; shift the timeseries with the highest residuals to the group with the lowest model residual
+5. **Model**; regress a model on each group
+* Repeat 4->5->4->5 until all timeseries are in the group with the lowest residual
+   
+**Algorithm timex-cluster-2**
+
+1. **Model**; regress a model on all series
+2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors
+3. **Model**; 
 
 # Acknowledgments
 
-* https://github.com/nikdon/pyEntropy
-
-# Sources
-* https://link.springer.com/article/10.1186/s12938-023-01075-1
+This library could not have been built without the following libraries
+* TSFel
+* TSfresh
+* Catch22
+* Katz
+* Nolds
+* [pyEntropy](https://github.com/nikdon/pyEntropy)
+* Aeon
+* TSlearn
+* TScluster
   
