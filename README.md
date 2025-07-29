@@ -64,6 +64,7 @@ Using features  from
 Using 
 * tslearn
 * sktime
+* aeon
 * Custom:
   * log rank
   * distance correlation
@@ -78,16 +79,19 @@ Using
 ```CFE/TDM/DSC -> clustering```
 
 ## TS specific
+
 * [MPF](https://matrixprofile.docs.matrixprofile.org/examples/Hierarchical_Clustering_Accelerometer_Walk_Stand_etc.html)
 * [TiCC](https://github.com/davidhallac/TICC)
 * dtwclust
 * [LCMM](https://cran.r-project.org/web/packages/lcmm/lcmm.pdf)
+* Aeon - clustering methods
+* TScluster - clustering methods
 
 ## Cross-sectional
+
 * [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
 * Sklearn clustering methods
 * HDBSCAN
-
 
 
 # Examples
@@ -100,4 +104,15 @@ https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
 
 # Sources
 * https://link.springer.com/article/10.1186/s12938-023-01075-1
+
+
+This library could not have been built without
+* TSFel
+* TSfresh
+* Catch22
+* Katz
+* Nolds
+* Aeon
+* TSlearn
+* TScluster
   
