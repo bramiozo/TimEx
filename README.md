@@ -47,7 +47,6 @@ detrender = ts_detrender(unit='days')
 TS_detrended = detrender.fit_transform(TS_data)
 ```
 
-
 # **Crossectional feature extraction** (CFE)
 
 Using features from
@@ -125,6 +124,22 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 1. **Model**; regress a model on all series
 2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors
 3. **Model**; 
+
+
+# Benchmarking
+
+We use the UCR time series archive as a benchmark. We allow for "heterogenisation" through random pruning of the time series. 
+
+```python
+
+from timex import benchmark
+from timex.clustering import TSKmeans, TSKernelKmeans
+
+UCRBench = benchmark(which="UCR", random_pruning=True, seed=42, hyper_parameters=None)
+Methods = [TSKmeans, TSKernelKmeans]
+
+res = UCRBench.go(Methods)
+```
 
 # Acknowledgments
 
