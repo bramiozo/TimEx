@@ -39,27 +39,31 @@ TS_smoothed = smoother.fit_transform(TS_data)
 
 # **Detrending**
 
+```python
+
+from timex import ts_detrender
+
+detrender = ts_detrender(unit='days')
+TS_detrended = detrender.fit_transform(TS_data)
+```
 
 
 # **Crossectional feature extraction** (CFE)
-Using features  from
+
+Using features from
 * catch22
 * tsfresh
 * kats
 * antropy
 * nolds
 * cesium
+* tsfel
+* tsflex
 * CNN/RNN based bottlenecks
 * LLM-based bottlenecks??
-* Custom functions:
-  * Added:
-  * wavelet
-  * FFT
-  * Mann-Kendall
+* Custom functions: including custom shapelets
 * Neurokit2 for EEG/ECG preprocessing
  
-*TODO:*  use tsflex to improve performance of feature  extraction.
-
 # **Timeseries distance matrices** (TDM):
 Using 
 * tslearn
@@ -75,8 +79,21 @@ Using
 ```timeseries -> low-ranking representation with SAEs```
 
 
-# Cluster
-```CFE/TDM/DSC -> clustering```
+# Clustering
+
+## CFE/TDM/DSC -> clustering
+
+Clustering follows the extraction of a distance matrix, either directly created using ```timex.tdm``` methods (i.e. a clustering algorithm with a pre-computed distance matrix), or 
+
+As clustering methods following CFE, TDM or DSC we have 
+
+* [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
+* Sklearn clustering methods: OPTICS, k-means
+* k-Medoid: basically rank-based k-Means
+* HDBSCAN
+
+## Latent class modeling
+
 
 ## TS specific
 
@@ -87,31 +104,16 @@ Using
 * Aeon - clustering methods
 * TScluster - clustering methods
 
-## Cross-sectional
-
-* [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
-* Sklearn clustering methods
-* HDBSCAN
-
-
-# Examples
-https://www.kaggle.com/code/slythe/feature-extraction-tsflex-catch22
-
 
 # Acknowledgments
 
-* https://github.com/nikdon/pyEntropy
-
-# Sources
-* https://link.springer.com/article/10.1186/s12938-023-01075-1
-
-
-This library could not have been built without
+This library could not have been built without the following libraries
 * TSFel
 * TSfresh
 * Catch22
 * Katz
 * Nolds
+* [pyEntropy](https://github.com/nikdon/pyEntropy)
 * Aeon
 * TSlearn
 * TScluster
