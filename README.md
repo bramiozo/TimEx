@@ -76,7 +76,6 @@ Using
 
 # Direct sparse coding of timeseries (DSC)
 
-```timeseries -> low-ranking representation with SAEs```
 
 
 # Clustering
@@ -89,11 +88,13 @@ As clustering methods following CFE, TDM or DSC we have
 
 * [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
 * Sklearn clustering methods: OPTICS, k-means
-* k-Medoid: basically rank-based k-Means
+* k-Medoids; PAM, CLARANS, etc.
+* k-Median; basically rank-based k-means
 * HDBSCAN
 
 ## Latent class modeling
 
+GBTM, GMM
 
 ## TS specific
 
@@ -103,6 +104,23 @@ As clustering methods following CFE, TDM or DSC we have
 * [LCMM](https://cran.r-project.org/web/packages/lcmm/lcmm.pdf)
 * Aeon - clustering methods
 * TScluster - clustering methods
+
+
+## Greedy
+
+It is relatively easy to come up with greedy algorithms to find the best separation of timeseries; for example
+
+**Algorithm timex-cluster-1**
+
+1. **Init**; randomly select $P$ timeseries (which should be small fraction of the total); determine the $K$ exemplars/groups using MSM (or DTW etc.) and e.g. Affinity Propagation
+2. **Model**; regress a model on each group.
+3. **Expand**; expand each group by taking the top-$N$ matches with the model
+* Repeat 2->3->2->3 until the number of series is exhausted
+4. **Remix**; shift the timeseries with the highest residuals to the group with the lowest model residual
+5. **Model**; regress a model on each group
+* Repeat 4->5->4->5 until all timeseries are in the group with the lowest residual
+   
+**Algorithm timex-cluster-2**
 
 
 # Acknowledgments
