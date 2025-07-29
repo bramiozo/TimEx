@@ -141,7 +141,7 @@ Methods = [TSKmeans, TSKernelKmeans]
 res = UCRBench.go(Methods)
 ```
 
-We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. We allow for "heterogenisation" through random pruning of the time series. 
+We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. Again, we allow for "heterogenisation" through random pruning of the time series. 
 
 
 
