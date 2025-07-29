@@ -1,5 +1,5 @@
 # TimEx
-Repository for extracting time-series features and clusters. This library is not meant for end-to-end timeseries-classification.
+Repository for extracting time-series features and clusters for heterogeneous multivariate data. This library is not meant for end-to-end timeseries-classification or segmentation.
 
 # **Standardisation**
 
