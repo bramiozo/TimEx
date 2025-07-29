@@ -128,18 +128,22 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 
 # Benchmarking
 
-We use the UCR time series archive as a benchmark. We allow for "heterogenisation" through random pruning of the time series. 
+We use the [UCR time series](https://www.cs.ucr.edu/%7Eeamonn/time_series_data/) archive as a univariate ts benchmark. We allow for "heterogenisation" through random pruning of the time series. 
 
 ```python
 
 from timex import benchmark
 from timex.clustering import TSKmeans, TSKernelKmeans
 
-UCRBench = benchmark(which="UCR", random_pruning=True, seed=42, hyper_parameters=None)
+UCRBench = benchmark(which="UCR", random_pruning=True, seed=42, hyper_parameters=None, multivariate=False)
 Methods = [TSKmeans, TSKernelKmeans]
 
 res = UCRBench.go(Methods)
 ```
+
+We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. We allow for "heterogenisation" through random pruning of the time series. 
+
+
 
 # Acknowledgments
 
