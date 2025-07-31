@@ -5,7 +5,7 @@ import numpy as np
 import json
 import os
 from shutil import copyfile
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Type
 import torch
 from torch.utils.data import Dataset
 
@@ -30,8 +30,11 @@ class Word_Tokenizer():
         sep_token="[SEP]",
         mask_token="[MASK]",
         cls_token="[CLS]",
+        SAX_List: List[Type[SymbolicAggregateApproximation]]|None=None,
         **kwargs):
-
+        #TODO
+        assert(...check if SAX_List is a list of fitted SymbolicAggregateApproximation class...)
+            
         # Special tokens setup
         bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
         eos_token = AddedToken(eos_token, lstrip=False, rstrip=False) if isinstance(eos_token, str) else eos_token
@@ -56,15 +59,19 @@ class Word_Tokenizer():
         self.tokenizer = Tokenizer(models.WordLevel(self.vocab, unk_token="<unk>"))
         self.tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
         self.tokenizer.decoder = decoders.WordPiece()
-        self.n_segments = 100
-        self.alphabet_size = 300
+        #self.n_segments = 100
+        #self.alphabet_size = 300
         self.toks_sax = None
         self.toks_sax_inv = None
         self.toks_ld = None
         self.toks_ld_inv = None
         self.filepaths = filepaths
         self.unk_token = unk_token
-        self.sax = SymbolicAggregateApproximation(n_segments=self.n_segments, alphabet_size_avg=self.alphabet_size)
+            
+        self.alphabet_size = SAX_List[0].alphabet_size
+        self.n_segments ..
+        self.n_channels = len(SAX_List)
+        self.SAX_List = SAX_List
 
 
         # SAX transformer
@@ -73,11 +80,11 @@ class Word_Tokenizer():
             his_inv_dat = []
 
             for sig_group in data:
-                for sig in sig_group:
+                for channel, sig in enumerate(sig_group):
                     signal1 = sig.reshape(1, -1)
-                    sax_data = self.sax.fit_transform(signal1)
+                    sax_data = self.SAX_List[channel].transform(signal1)
                     his_dat.append(sax_data.reshape(self.n_segments,))
-                    sax_inv = self.sax.inverse_transform(sax_data).reshape(-1)
+                    sax_inv = self.SAX_List[channel].inverse_transform(sax_data).reshape(-1)
                     his_inv_dat.append(sax_inv)
 
             self.toks_sax = np.array(his_dat)
