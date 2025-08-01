@@ -287,10 +287,12 @@ class Extractor:
 
             cumuvalues, time_cumuvalues = time_function(cumuvals)(ts_data)
 
-            fourcoeffs, time_fourcoeffs = time_function(extract_fft_features)(ts_data,
-                                                                              num_features=8,
-                                                                              max_frequency=40
+            fourcoeffsPolar, time_fourcoeffs = time_function(extract_fft_features)(ts_data,
+                                                                              num_features=10,
+                                                                              max_frequency=50
                                                                               )
+            fourcoeffsCart, time_fourcoeffs_cart = time_function(FourierCoefficients)(ts_data,
+                                                                                      number_of_components=25)
 
             wavelet_coeffs, time_wavelet_coeffs = time_function(wavelets.extract_wavelet_features)(ts_data,
                                                                                                    level=3,
@@ -372,7 +374,8 @@ class Extractor:
             if shape_comparison:
                 res_dict.update(shape_comparisons)
             res_dict.update(cumuvalues)
-            res_dict.update(fourcoeffs)
+            res_dict.update(fourcoeffsPolar)
+            res_dict.update(fourcoeffsCart)
             res_dict.update(wavelet_coeffs)
             res_dict.update(peak_and_valleys)
             res_dict.update(wavelet_transform_feature)
@@ -628,11 +631,17 @@ class KatzExtractor:
             'stl_features': get_stl_features,
             'acfpacf_features': get_acfpacf_features,
             'flat_spots': get_flat_spots,
-            'unitroot_kpss': get_unitroot_kpss,
+            #'unitroot_kpss': get_unitroot_kpss,
             'holt_params': get_holt_params,
         }
 
         res = {}
+        name_dict = {
+            'acfpacf_features': ['pacf5', 'diff1y_pacf5', 'diff2y_pacf5', 'seas_pacf1'],
+            'stl_features': ["var_trend", "var_res", "trend_strength", "seasonality_strength",
+                              "spikiness", "peak", "trough"],
+            'holt_params': ["holt_alpha", "holt_beta"]
+        }
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
@@ -640,13 +649,13 @@ class KatzExtractor:
                     result, time_elapsed = time_function(fun)(ts_data)
                 except Exception as e:
                     # TODO: this is problematic because we don't carry the keys of results that are dictionaries
-                    result, time_elapsed = np.nan, np.nan
-                    # if f in ['stl_features', 'acfpacf_features', 'holt_params']:
-                    #   result = {..}
-                    #print(f'Error: {e}. Fun: {f}')
+                    if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+                        result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
+                    else:
+                        result, time_elapsed = np.nan, np.nan
+
 
                 if f in ['stl_features', 'acfpacf_features', 'holt_params']:
-
                     res.update(result)
                 else:
                     res[f] = result
@@ -679,6 +688,8 @@ class TSFelExtractor:
             else TSFEL_FEATURES
         self.features = None
         self.duration_dict = defaultdict(float)
+
+        
     def tsfelfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
             'positive_turning': positive_turning,
@@ -706,12 +717,18 @@ class TSFelExtractor:
             'wavelet_entropy': wavelets.wavelet_entropy,
             'wavelet_abs_mean': wavelets.wavelet_abs_mean,
             'wavelet_std': wavelets.wavelet_std,
-            'wavelet_var': wavelets.wavelet_var,
             'wavelet_energy': wavelets.wavelet_energy,
             'mfcc': mfcc,
             'lpcc': lpcc
         }
         res = {}
+        name_dict = {
+            'wavelet_abs_mean': [f'WVL_amean_{i}' for i in range(10)],
+            'wavelet_std': [f'WVL_std_{i}' for i in range(10)],
+            'wavelet_energy': [f'WVL_energy_{i}' for i in range(10)],
+            'mfcc': [f'MFCC_{i}' for i in range(13)],
+            'lpcc': [f'LPCC_{i}' for i in range(12)]
+        }
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
@@ -719,8 +736,12 @@ class TSFelExtractor:
                     # TODO: fix more gracefully
                     result, time_elapsed = time_function(fun)(ts_data)
                 except:
-                    result, time_elapsed = np.nan, np.nan
-                if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
+                    if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
+                         'wavelet_energy', 'mfcc', 'lpcc']:
+                        result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
+                    else:
+                        result, time_elapsed = np.nan, np.nan
+                if f in ['wavelet_abs_mean', 'wavelet_std',
                          'wavelet_energy', 'mfcc', 'lpcc']:
                     res.update(result)
                 else:
@@ -1340,11 +1361,11 @@ def get_acfpacf_features(
         "seas_pacf1": np.nan,
     }
     if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
-        msg = (
-            "Length is shorter than period, or constant time series, "
-            "unable to calculate acf/pacf features"
-        )
-        logging.error(msg)
+        #msg = (
+        #    "Length is shorter than period, or constant time series, "
+        #    "unable to calculate acf/pacf features"
+        #)
+        #logging.error(msg)
         return acfpacf_features
 
     nlag = min(acfpacf_lag, len(x) - 2)
@@ -1415,11 +1436,11 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
     """
 
     if len(x) <= nbins:
-        msg = (
-            "Length of time series is shorter than nbins, unable to "
-            "calculate flat spots feature"
-        )
-        logging.error(msg)
+        #msg = (
+        #    "Length of time series is shorter than nbins, unable to "
+        #    "calculate flat spots feature"
+        #)
+        #logging.error(msg)
         return np.nan
 
     max_run_length = 0
@@ -1593,7 +1614,7 @@ def get_hw_params(
         logging.warning(f"Holt-Winters failed {e}")
     return hw_params_features
 
-def negative_turning(signal):
+def negative_turning(signal)->float:
     """Computes number of negative turning points of the signal.
 
     Feature computational cost: 1
@@ -1612,7 +1633,7 @@ def negative_turning(signal):
     negative_turning_pts = np.where((diff_sig[array_signal] < 0) & (diff_sig[array_signal + 1] > 0))[0]
 
     return len(negative_turning_pts)
-def positive_turning(signal):
+def positive_turning(signal)->float:
     """Computes number of positive turning points of the signal.
 
     Feature computational cost: 1
@@ -1635,7 +1656,7 @@ def positive_turning(signal):
 
     return len(positive_turning_pts)
 
-def travelled_distance(signal):
+def travelled_distance(signal)->float:
     """Computes signal traveled distance.
 
     Calculates the total distance traveled by the signal
@@ -1656,7 +1677,7 @@ def travelled_distance(signal):
     diff_sig = np.diff(signal).astype(float)
     return np.sum([np.sqrt(1 + diff_sig**2)])
 
-def auc(signal, fs=1):
+def auc(signal, fs=1)->float:
     """Computes the area under the curve of the signal computed with trapezoid
     rule.
 
@@ -1691,7 +1712,7 @@ def lempel_ziv(signal, threshold=None):
     lz_index = _calc_lempel_ziv_complexity(string_binary_signal)
     return lz_index
 
-def median_abs_deviation(signal):
+def median_abs_deviation(signal)->float:
     """Computes median absolute deviation of the signal.
 
     Feature computational cost: 1
@@ -1749,7 +1770,7 @@ def _compute_time(signal, fs):
 
     return np.arange(0, len(signal)) / fs
 
-def _calc_lempel_ziv_complexity(sequence):
+def _calc_lempel_ziv_complexity(sequence)->float:
     """Manual implementation of the Lempel-Ziv complexity.
 
     It is defined as the number of different substrings encountered as
@@ -1785,7 +1806,7 @@ def _calc_lempel_ziv_complexity(sequence):
 
     return len(sub_strings) / len(sequence)
 
-def spectral_distance(signal, fs=1):
+def spectral_distance(signal, fs=1)->float:
     """Computes the signal spectral distance.
 
     Distance of the signal's cumulative sum of the FFT elements to
@@ -1814,7 +1835,7 @@ def spectral_distance(signal, fs=1):
 
     return np.sum(points_y - cum_fmag)
 
-def fundamental_frequency(signal, fs=1):
+def fundamental_frequency(signal, fs=1)->float:
     """Computes fundamental frequency of the signal.
 
     The fundamental frequency integer multiple best explain
@@ -1849,7 +1870,7 @@ def fundamental_frequency(signal, fs=1):
         f0 = f[min(bp)]
     return f0
 
-def max_power_spectrum(signal, fs=1):
+def max_power_spectrum(signal, fs=1)->float:
     """Computes maximum power spectrum density of the signal.
 
     Feature computational cost: 1
@@ -1872,7 +1893,7 @@ def max_power_spectrum(signal, fs=1):
         return float(max(welch(signal / np.std(signal), fs, nperseg=len(signal))[1]))
 
 
-def max_frequency(signal, fs=1):
+def max_frequency(signal, fs=1)->float:
     """Computes maximum frequency of the signal.
 
     Feature computational cost: 2
@@ -1900,7 +1921,7 @@ def max_frequency(signal, fs=1):
     return f[ind_mag]
 
 
-def median_frequency(signal, fs=1):
+def median_frequency(signal, fs=1)->float:
     """Computes median frequency of the signal.
 
     Feature computational cost: 1
@@ -1928,7 +1949,7 @@ def median_frequency(signal, fs=1):
     return f_median
 
 
-def spectral_centroid(signal, fs=1):
+def spectral_centroid(signal, fs=1)->float:
     """Barycenter of the spectrum.
 
     Description and formula in Article:
@@ -1956,7 +1977,7 @@ def spectral_centroid(signal, fs=1):
         return np.dot(f, fmag / np.sum(fmag))
 
 
-def spectral_decrease(signal, fs=1):
+def spectral_decrease(signal, fs=1)->float:
     """Represents the amount of decreasing of the spectra amplitude.
 
     Description and formula in Article:
@@ -1995,7 +2016,7 @@ def spectral_decrease(signal, fs=1):
         return soma_den * soma_num
 
 
-def spectral_kurtosis(signal, fs=1):
+def spectral_kurtosis(signal, fs=1)->float:
     """Measures the flatness of a distribution around its mean value.
 
     Description and formula in Article:
@@ -2024,7 +2045,7 @@ def spectral_kurtosis(signal, fs=1):
         return np.sum(spect_kurt) / (spectral_spread(signal, fs) ** 4)
 
 
-def spectral_skewness(signal, fs=1):
+def spectral_skewness(signal, fs=1)->float:
     """Measures the asymmetry of a distribution around its mean value.
 
     Description and formula in Article:
@@ -2055,7 +2076,7 @@ def spectral_skewness(signal, fs=1):
         return np.sum(skew) / (spectral_spread(signal, fs) ** 3)
 
 
-def spectral_spread(signal, fs=1):
+def spectral_spread(signal, fs=1)->float:
     """Measures the spread of the spectrum around its mean value.
 
     Description and formula in Article:
@@ -2085,7 +2106,7 @@ def spectral_spread(signal, fs=1):
         return np.dot(((f - spect_centroid) ** 2), (fmag / np.sum(fmag))) ** 0.5
 
 
-def spectral_slope(signal, fs=1):
+def spectral_slope(signal, fs=1)->float:
     """Computes the spectral slope.
 
     Spectral slope is computed by finding constants m and b of the function aFFT = mf + b, obtained by linear regression
@@ -2126,7 +2147,7 @@ def spectral_slope(signal, fs=1):
             return num_ / denom_
 
 
-def spectral_variation(signal, fs=1):
+def spectral_variation(signal, fs=1)->float:
     """Computes the amount of variation of the spectrum along time.
 
     Spectral variation is computed from the normalized cross-correlation between two consecutive amplitude spectra.
@@ -2159,11 +2180,10 @@ def spectral_variation(signal, fs=1):
         variation = 1
     else:
         variation = 1 - (sum1 / ((sum2**0.5) * (sum3**0.5)))
-
     return variation
 
 
-def spectral_positive_turning(signal, fs=1):
+def spectral_positive_turning(signal, fs=1)->float:
     """Computes number of positive turning points of the fft magnitude signal.
 
     Feature computational cost: 1
@@ -2189,7 +2209,7 @@ def spectral_positive_turning(signal, fs=1):
 
     return len(positive_turning_pts)
 
-def spectral_roll_off(signal, fs=1):
+def spectral_roll_off(signal, fs=1)->float:
     """Computes the spectral roll-off of the signal.
 
     The spectral roll-off corresponds to the frequency where 95% of the signal magnitude is contained
@@ -2220,7 +2240,7 @@ def spectral_roll_off(signal, fs=1):
 
 
 
-def spectral_roll_on(signal, fs=1):
+def spectral_roll_on(signal, fs=1)->float:
     """Computes the spectral roll-on of the signal.
 
     The spectral roll-on corresponds to the frequency where 5% of the signal magnitude is contained
@@ -2241,10 +2261,21 @@ def spectral_roll_on(signal, fs=1):
         Spectral roll-on
     """
     f, fmag = _calc_fft(signal, fs)
-    cum_ff = np.cumsum(fmag)
-    value = 0.05 * (np.sum(fmag))
+    # total magnitude and threshold at 5%
+    total_mag = np.sum(fmag)
+    threshold = 0.05 * total_mag
 
-def spectral_entropy(signal, fs=1):
+    # cumulative sum and index where it first exceeds the threshold
+    cum_mag = np.cumsum(fmag)
+    idx = np.searchsorted(cum_mag, threshold, side='left')
+
+    # guard against edge cases
+    if idx >= len(f):
+        return f[-1]
+    return f[idx]
+    
+
+def spectral_entropy(signal, fs=1)->float:
     """Computes the spectral entropy of the signal based on Fourier transform.
 
     Feature computational cost: 1
@@ -2281,7 +2312,7 @@ def spectral_entropy(signal, fs=1):
 
     return -np.multiply(prob, np.log2(prob)).sum() / np.log2(prob.size)
 
-def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22):
+def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22)->float:
     """Computes the MEL cepstral coefficients.
 
     It provides the information about the power in each frequency band.
@@ -2329,7 +2360,7 @@ def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_l
 
     return {f'MFCC_{k}': v for k,v in enumerate(tuple(mel_coeff))}
 
-def lpcc(signal, n_coeff=12):
+def lpcc(signal, n_coeff=12)->float:
     """Computes the linear prediction cepstral coefficients.
 
     Implementation details and description in:
@@ -2363,7 +2394,7 @@ def lpcc(signal, n_coeff=12):
 
 
 
-def cumuvals(signal, d=5):
+def cumuvals(signal, d=5)->float:
     """Computes the values of cumulative values
     along the time axis.
 
@@ -2390,7 +2421,7 @@ def cumuvals(signal, d=5):
     else:
         return {f'cumfunval_{k}': np.nan for k in range(0, d)}
 
-def _filterbank(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40):
+def _filterbank(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40)->float:
     """Computes the MEL-spaced filterbank.
 
     It provides the information about the power in each frequency band.
@@ -2670,23 +2701,21 @@ def shape_compare(x: np.ndarray) -> dict:
     return out_dict
 
 
-def FourierCoefficients(timeseries, number_of_components):
-    """
-    Calculate the Fourier coefficients for a given time series.
-
-    Parameters:
-    timeseries (array-like): The input time series data.
-    number_of_components (int): The number of Fourier components to calculate.
-
-    Returns:
-    np.ndarray: Fourier coefficients (complex numbers).
-    """
+def FourierCoefficients(timeseries, number_of_components=25) -> Dict[str, float]:
     N = len(timeseries)
-    # Compute the Fourier Transform
-    fft_result = np.fft.fft(timeseries)
-    # Normalize and select the first 'number_of_components' coefficients
-    coefficients = fft_result[:number_of_components] / N
-    return coefficients
+    t = np.arange(N)
+    freqs = np.fft.fftfreq(N)[:number_of_components]
+
+    result: Dict[str, float] = {}
+    for k, f in enumerate(freqs):
+        cos_c = (2/N) * np.sum(timeseries * np.cos(2*np.pi*f*t))
+        sin_c = (2/N) * np.sum(timeseries * np.sin(2*np.pi*f*t))
+        result[f'ff_freq_{k}'] = f
+        result[f'ff_cos_{k}']  = cos_c
+        result[f'ff_sin_{k}']  = sin_c
+
+    return result
+
 
 @njit
 def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
@@ -2746,7 +2775,7 @@ def extract_peaks_and_valleys(y, N=10):
 
     return feature_dict
 
-def extract_fft_features(y, x=None, num_features=5, max_frequency=40):
+def extract_fft_features(y, x=None, num_features=5, max_frequency=40)->Dict[str,float]:
     """
     Extract frequency domain features from a time series signal using FFT.
     

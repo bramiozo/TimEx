@@ -5,10 +5,6 @@ from numpy import ndarray, concatenate
 import numpy as np
 
 import neurokit2 as nk
-from pycatch22 import catch22_all
-from tsfresh.feature_extraction import extract_features
-from tsfeatures import pacf_features, acf_features, stl_features, hurst
-import tsfel
 import pandas as pd
 import torch
 import os
@@ -16,7 +12,7 @@ import sys
 import gc
 import time
 import wfdb
-from wfdb.processing import resample_sig # should be default to normalize fs
+
 import random
 import numpy as np
 import pandas as pd
@@ -29,15 +25,12 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import re
 import h5py
 import numba
-from scipy.signal import butter, filtfilt, detrend, savgol_filter
 import seaborn as sns
 from matplotlib import pyplot as plt
 
 
 # move all preprocessing logic like filtering, smoothing and detrending to ecg.preprocessor
 from timex.ecg import preprocessor
-
-
 from sklearn.preprocessing import label_binarize
 
 # add logging
@@ -114,6 +107,10 @@ class ECGDataset(Dataset):
     re_history = re.compile(r'Hx:\s?(\w+)', re.IGNORECASE)
     re_meds = re.compile(r'Rx:\s?(\w+)', re.IGNORECASE)
 
+    AUGMENTATIONS = ['gauss', 'shift', 'scale', 'dropout']
+    PREPROCESSING = ['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
+                    'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']
+
     def __init__(self,
         data: Union[List[str],List[Tuple[str,int]], str],
         data_type: Literal['folder_with_npy',
@@ -134,10 +131,18 @@ class ECGDataset(Dataset):
         output_dir: str='',
 
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
-        preprocessing: List[Literal['nan', 'bandpass', 'savgol',
+        preprocessing: List[Literal['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
-                                     = ['bandpass', 'resampler', 'detrend']
+                                     = ['bandpass', 'resampler', 'detrend'],
+        prepping_backend: Literal['v1', 'v2']= 'v1'
         ):
+
+        if len(augmentations)>0:
+            assert(all([c in self.AUGMENTATIONS for c in augmentations])), f'You can only select augmentations from {self.AUGMENTATIONS}'
+
+        if len(preprocessing)>0:
+            assert(all([c in self.PREPROCESSING for c in preprocessing])), f'You can only select preprocessing options from {self.PREPROCESSING}'
+
 
         if data_type not in ['folder_with_hea', 'folder_with_npy']:
             raise ValueError(f"Unsupported data type: {data_type}. Must be one of ['folder_with_hea', 'folder_with_npy']. Others options are work in progress.")
@@ -214,6 +219,8 @@ class ECGDataset(Dataset):
         self.extract_metadata = extract_metadata
         self.visualisation = visualisation
         self.output_dir = output_dir
+        self.prepping_backend = prepping_backend
+
 
     def __len__(self):
         return len(self.file_list)
@@ -268,6 +275,7 @@ class ECGDataset(Dataset):
         else:
             raise ValueError(f"Unsupported input source: {source}")
 
+        self.fs_out = self.fs
         return torch.tensor(signal, dtype=torch.float32), comment
 
     def compute_weights(self):
@@ -284,148 +292,6 @@ class ECGDataset(Dataset):
             weights = weights.values.tolist()
         #logger.info("Done with the weights.")
         return torch.FloatTensor(weights)
-
-
-    def augment_signal(self, signal):
-        """Apply enhanced augmentations to the signal"""
-        if not self.is_train or not self.config.USE_AUGMENTATION:
-            return signal
-
-        # Time shift augmentation (increased probability and range)
-        if 'shift' in self.augmentations:
-            if np.random.random() < self.config.TIME_SHIFT_PROB:
-                shift_factor = np.random.uniform(-self.config.TIME_SHIFT_MAX, self.config.TIME_SHIFT_MAX)
-                shift_amount = int(shift_factor * signal.shape[1])
-                if shift_amount > 0:
-                    signal = torch.cat([signal[:, shift_amount:], signal[:, :shift_amount]], dim=1)
-                elif shift_amount < 0:
-                    shift_amount = abs(shift_amount)
-                    signal = torch.cat([signal[:, -shift_amount:], signal[:, :-shift_amount]], dim=1)
-
-        # TODO: scale should only be applied to the peaks/valleys
-        if 'scale' in self.augmentations:
-            # Amplitude scaling augmentation
-            if np.random.random() < self.config.AMPLITUDE_SCALE_PROB:
-                scale_factor = np.random.uniform(*self.config.AMPLITUDE_SCALE_RANGE)
-                signal = signal * scale_factor
-
-        if 'gauss' in self.augmentations:
-            # Enhanced Gaussian noise
-            if np.random.random() < self.config.GAUSSIAN_NOISE_PROB:
-                noise = torch.randn_like(signal) * self.config.GAUSSIAN_NOISE_SCALE
-                signal = signal + noise
-
-        if 'dropout' in self.augmentations:
-            # Lead dropout (randomly zero out leads to improve robustness)
-            if np.random.random() < 0.8:  # 10% chance
-                lead_idx = np.random.randint(0, int(0.05*signal.shape[0]))
-                signal[lead_idx] = signal[lead_idx] * 0.0
-
-        return signal
-
-    def _standardize_sampling_rate(self, signal):
-        signal_resampled, _ = resample_sig(signal.numpy(),
-                                            self.fs, self.config.SAMPLING_RATE)
-        signal = torch.tensor(signal_resampled)
-        return signal
-
-    def _bandpass_filter(self, signal, lowcut=0.5, highcut=40.0, order=4):
-        """
-        Apply a Butterworth bandpass filter to the ECG signal.
-
-        Args:
-            signal: np.array or torch tensor [channels, samples].
-            lowcut: Lower cutoff frequency in Hz.
-            highcut: Upper cutoff frequency in Hz.
-            order: Order of the Butterworth filter.
-
-        Returns:
-            Filtered signal with same shape.
-        """
-        nyquist = 0.5 * self.config.SAMPLING_RATE
-        low = lowcut / nyquist
-        high = highcut / nyquist
-
-        b, a = butter(order, [low, high], btype='band')
-
-        # Convert torch tensor to numpy if needed
-        if isinstance(signal, torch.Tensor):
-            signal_np = signal.numpy()
-        else:
-            signal_np = signal
-
-        filtered_signal = filtfilt(b, a, signal_np, axis=1)
-
-        # Convert back to tensor if original was a tensor
-        if isinstance(signal, torch.Tensor):
-            filtered_signal = torch.tensor(filtered_signal, dtype=signal.dtype)
-
-        return filtered_signal
-
-    def _powerline_filter(self, signal, freq=60, bandwidth=1.0, order=2):
-        """
-        Apply a powerline notch filter (bandstop) to remove mains interference.
-
-        Args:
-            signal: np.array or torch tensor with shape [channels, samples].
-            freq: Central frequency of powerline interference (50 or 60 Hz).
-            bandwidth: Bandwidth around the powerline frequency to remove (default ±1 Hz).
-            order: Order of the Butterworth filter (default=2 recommended).
-
-        Returns:
-            Filtered signal with same shape.
-        """
-        nyquist = 0.5 * self.config.SAMPLING_RATE
-        low = (freq - bandwidth) / nyquist
-        high = (freq + bandwidth) / nyquist
-        b, a = butter(order, [low, high], btype='bandstop')
-
-        # Ensure it's numpy for scipy functions
-        if isinstance(signal, torch.Tensor):
-            signal_np = signal.numpy()
-        else:
-            signal_np = signal
-
-        filtered_signal = filtfilt(b, a, signal_np, axis=1)
-
-        # Convert back to original type if needed
-        if isinstance(signal, torch.Tensor):
-            filtered_signal = torch.tensor(filtered_signal, dtype=signal.dtype)
-
-        return filtered_signal
-
-    def _savgol_filter(self, signal, window_length=31, polyorder=3):
-        """
-        Apply Savitzky-Golay filter for smoothing the ECG signal.
-
-        Args:
-            signal: np.array or torch.Tensor with shape [leads, samples]
-            window_length: Size of the filter window (must be odd and >= polyorder + 2)
-            polyorder: Polynomial order for fitting (must be less than window_length)
-
-        Returns:
-            Smoothed signal of the same shape.
-        """
-        # Validate window size
-        if window_length % 2 == 0:
-            raise ValueError("window_length must be odd")
-        if polyorder >= window_length:
-            raise ValueError("polyorder must be less than window_length")
-
-        # Convert if needed
-        if isinstance(signal, torch.Tensor):
-            signal_np = signal.numpy()
-        else:
-            signal_np = signal
-
-        # Apply Savitzky-Golay filter across each lead
-        smoothed = savgol_filter(signal_np, window_length=window_length, polyorder=polyorder, axis=1)
-
-        # Convert back if needed
-        if isinstance(signal, torch.Tensor):
-            smoothed = torch.tensor(smoothed, dtype=signal.dtype)
-
-        return smoothed
 
     def _standardize_signal(self, signal):
         # Normalize each lead using robust standardization
@@ -451,59 +317,74 @@ class ECGDataset(Dataset):
             signal = signal[:, start:start + self.config.MAX_OUTPUT_LENGTH]
         elif signal.shape[1] < self.config.MAX_OUTPUT_LENGTH:
             # Zero-padding
+            # TODO: make pad settable
             pad = torch.zeros((self.config.LEADS, self.config.MAX_OUTPUT_LENGTH - signal.shape[1]))
             signal = torch.cat((signal, pad), dim=1)
         return signal
 
-    def _detrend_signal(self, signal):
-        """
-        Remove linear trend from each lead (channel).
-
-        """
-        if isinstance(signal, torch.Tensor):
-            signal_np = signal.numpy()
-        else:
-            signal_np = signal
-
-        detrended = detrend(signal_np, axis=1, type='linear')
-
-        if isinstance(signal, torch.Tensor):
-            detrended = torch.tensor(detrended, dtype=signal.dtype)
-
-        return detrended
 
     def preprocess_signal(self, signal):
         """Enhanced preprocessing with better handling of ECG characteristics"""
 
+        ecg_preprocessor = preprocessor.ECGSignalProcessor(signal, self.config.LEADS, fs=self.fs)
+
         # nan: Handle NaN values and outliers
         if 'nan' in self.preprocessing:
-            signal = torch.nan_to_num(signal, nan=0.0, posinf=3.0, neginf=-3.0)
+            print("Processing: NaNs...", flush=True)
+            signal = torch.nan_to_num(signal, nan=0.0, posinf=5.0, neginf=-5.0)
+
         # detrend: Remove linear trend
         if 'detrend' in self.preprocessing:
-            signal = self._detrend_signal(signal)
+            print("Processing: detrending...", flush=True)
+            ecg_preprocessor.apply_detrend(method='sliding_median', order=3, period=100, windows=101, cutsize=250, median_window=30, iterate=5)
+            signal = ecg_preprocessor.get()
+
+        # powerline: Remove powerline interference (notch filter)
+        if ('powerline' in self.preprocessing) | ('notch' in self.preprocessing):
+            print("Processing: powerline...", flush=True)
+            ecg_preprocessor.apply_notch_filter(freq=50.0, bandwidth=1.0, order=4)
+            signal = ecg_preprocessor.get()
+
         # bandpass: Remove baseline wander (high-pass filter simulation)
         if 'bandpass' in self.preprocessing:
-            signal = self._bandpass_filter(signal, lowcut=0.5, highcut=40.0)
+            print("Processing: bandpass...", flush=True)
+            ecg_preprocessor.apply_bandpass_filter(lowcut=0.5, highcut=40.0, order=4)
+            signal = ecg_preprocessor.get()
+
         # savgol: Apply Savitzky-Golay filter for smoothing
         if 'savgol' in self.preprocessing:
-            signal = self._savgol_filter(signal, window_length=31, polyorder=3)
-        # powerline: Remove powerline interference (notch filter)
-        if 'powerline' in self.preprocessing:
-            signal = self._powerline_filter(signal, freq=60, bandwidth=1.0)
+            print("Processing: Savitzky-Golay...", flush=True)
+            ecg_preprocessor.apply_savgol_filter(window_length=31, polyorder=3)
+            signal = ecg_preprocessor.get()
+
         # resampler: Resample to a standard sampling rate
         if 'resampler' in self.preprocessing:
-            signal = self._standardize_sampling_rate(signal)
+            print("Processing: re-sampler...", flush=True)
+            ecg_preprocessor.standardize_sampling_rate(fs_target=self.config.SAMPLING_RATE)
+            signal = ecg_preprocessor.get()
+
+        if 'peak_trimming' in self.preprocessing:
+            print("Processing: peak_trimming...", flush=True)
+            ecg_preprocessor.trim_signal()
+            signal = ecg_preprocessor.get()
+
         # standardscaler: Standardizesignal
         # truncate: Standardize signal length
         if 'truncate' in self.preprocessing:
+            print("Processing: truncating...", flush=True)
             signal = self._standardize_signal_length(signal)
+
+        if 'standardscaler' in self.preprocessing:
+            print("Processing: standardscaling...", flush=True)
+            signal = self._standardize_signal_(signal)            
+
         return signal
     
     @staticmethod
     def visualize(ts: np.ndarray, file_name: str="ecg"):
         # plot in one figure
-        max_rows = ts.shape[0]//2+1
-        fig, ax = plt.subplots(ncols=2, nrows=max_rows, figsize=(18,20))
+        max_rows = ts.shape[0]//2 + ts.shape[0]%2
+        fig, ax = plt.subplots(ncols=2, nrows=max_rows, figsize=(18,30))
 
         for k, _ts in enumerate(ts):
             i = k // 2
@@ -537,7 +418,7 @@ class ECGDataset(Dataset):
         '''
 
         ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
-        _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
+        _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=self.fs_out) #compute R peaks from II
         signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
         signal_dwt['ECG_R_Peaks'] = 0
         signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
@@ -576,7 +457,7 @@ class ECGDataset(Dataset):
 
         # global attention mask merging all interest regions
         attention_mask = (p_wave | t_wave | qrs_complex).tolist()
-        attention_mask = np.repeat([attention_mask], 12, axis=0) # since the leads are temporally aligned, interest regions should be located within the same intervals
+        attention_mask = np.repeat([attention_mask], 12, axis=0)
         attention_mask = np.concatenate(attention_mask, axis=0)
 
         return attention_mask
@@ -590,8 +471,8 @@ class ECGDataset(Dataset):
             metadata = None
 
             if self.visualisation:
-                print(f"Visualize ts data: {signal.shape}")
-                self.visualize(np.array(signal), file_name=os.path.join(self.output_dir, f'pre_{idx}_ecg.pdf'))
+                print(f"Visualize first 6 channels ts data: {signal.shape}")
+                self.visualize(np.array(signal)[:6,:], file_name=os.path.join(self.output_dir, f'pre_{idx}_ecg.pdf'))
 
 
             if len(self.preprocessing) > 0:
@@ -600,11 +481,15 @@ class ECGDataset(Dataset):
             if len(self.augmentations) > 0:
                 signal = self.augment_signal(signal)
 
-            # Ensure signal has the correct shape
-            signal = signal[:self.config.LEADS, :self.config.MAX_OUTPUT_LENGTH]
+            # # Ensure signal has the correct shape
+            # try:
+            #     signal = signal[:self.config.LEADS, :self.config.MAX_OUTPUT_LENGTH]
+            # except Exception:
+            #     raise IndexError(f"Indexing error: signal {signal.shape}, # config lead {self.config.LEADS}, max output len {self.config.MAX_OUTPUT_LENGTH}.")
 
-            if self.visualisation:
-                self.visualize(np.array(signal),  file_name=os.path.join(self.output_dir, f'post_{idx}_ecg.pdf'))
+            if (self.visualisation) & ((len(self.preprocessing)>0) | (len(self.augmentations)>0)):
+                print(f"Visualize first 6 channels ts data: {signal.shape}")
+                self.visualize(np.array(signal)[:6,:],  file_name=os.path.join(self.output_dir, f'post_{idx}_ecg.pdf'))
 
             if record is not None:
                 if self.extract_label:
