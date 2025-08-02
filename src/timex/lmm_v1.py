@@ -12,17 +12,44 @@ from matplotlib import colors
 from tqdm import tqdm
 import numpy as np
 
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklego.meta import GroupedTransformer
 
-# 1. Build spline basis for time
-def build_spline_basis(time, df=5, degree=3):
+from typing import Literal
+
+def build_spline_basis(time, df=5, degree=3, adaptive=False):
     """
     time: (T,) array of timestamps (numeric)
-    df: number of spline basis functions
+    df: when adaptive=False behaves as before (passed to patsy.bs);
+        when adaptive=True, target number of basis functions is df + 1
+        and interior knots are placed at quantiles of `time`.
     degree: spline degree
-    returns: (T, df) design matrix
+    adaptive: if True, place knots at empirical quantiles (more knots in dense time regions)
+    returns: (T, P) design matrix
     """
-    dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True)", {"x": time}, return_type="dataframe")
+    if not adaptive:
+        dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True)",
+                     {"x": time}, return_type="dataframe")
+    else:
+        # target number of output columns to mirror original behavior: bs(..., df=df) gave df+1 columns
+        n_basis = df + 1  # desired # of basis functions
+        # For include_intercept=True, number of columns = #interior_knots + degree + 2
+        n_interior = n_basis - degree - 2
+        if n_interior < 0:
+            raise ValueError(f"df={df} too small for degree={degree} in adaptive mode")
+        if n_interior > 0:
+            probs = onp.linspace(0, 1, n_interior + 2)[1:-1]  # skip 0 and 1
+            knots = onp.quantile(time, probs)
+            dm = dmatrix(f"bs(x, degree={degree}, include_intercept=True, knots={list(knots)})",
+                         {"x": time}, return_type="dataframe")
+        else:
+            # no interior knots case: fall back to simple bs with df to get n_basis columns
+            dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True)",
+                         {"x": time}, return_type="dataframe")
     return jnp.array(dm)
+
 
 # 2. Define linear mixed model in NumPyro
 def lmm_model(spline_basis, y, series_idx, n_series):
@@ -32,8 +59,35 @@ def lmm_model(spline_basis, y, series_idx, n_series):
         re = numpyro.sample("re", dist.Normal(0, sigma_re))
     beta = numpyro.sample("beta", dist.Normal(jnp.zeros(P), jnp.ones(P)))
     sigma = numpyro.sample("sigma", dist.Exponential(1.0))
+
     mu = jnp.dot(spline_basis, beta) + re[series_idx]
     numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+
+def lmm_model_random_slopes(spline_basis, y, series_idx, n_series):
+    # spline_basis: (N, P), series_idx: (N,), y: (N,)
+    N, P = spline_basis.shape
+
+    # global scale for series-level deviations
+    sigma_b = numpyro.sample("sigma_b", dist.Exponential(1.0))
+
+    # per-series deviation vector b[i] of length P
+    with numpyro.plate("series", n_series):
+        b = numpyro.sample("b", dist.Normal(jnp.zeros(P), sigma_b).to_event(1))  # (n_series, P)
+
+    # global shape
+    beta = numpyro.sample("beta", dist.Normal(jnp.zeros(P), jnp.ones(P)).to_event(1))  # (P,)
+
+    # observation noise
+    sigma = numpyro.sample("sigma", dist.Exponential(1.0))
+
+    # per-observation coefficient: beta + series-specific deviation
+    coeffs = beta + b[series_idx]           # (N, P)
+    mu = jnp.sum(spline_basis * coeffs, axis=1)  # (N,)
+
+    with numpyro.plate("obs_plate", N):
+        numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+
+
 
 # 3. Fit model and compute per-series RMSE
 def fit_lmm(spline_basis, y, series_idx, n_series, rng_key,
@@ -55,68 +109,124 @@ def fit_lmm(spline_basis, y, series_idx, n_series, rng_key,
 
     return rmse_pos, rmse_neg
 
+def fit_lmm_random_slopes(spline_basis, y, series_idx, n_series, rng_key,
+                          num_warmup=500, num_samples=1000):
+    kernel = NUTS(lmm_model_random_slopes, init_strategy=init_to_feasible)
+    mcmc = MCMC(kernel, num_warmup=num_warmup, num_samples=num_samples)
+    mcmc.run(rng_key, spline_basis=spline_basis, y=y,
+             series_idx=series_idx, n_series=n_series)
+    post = mcmc.get_samples()
+    b_hat = jnp.mean(post['b'], axis=0)  # (n_series, P): per-series shape deviations
+    beta_hat = jnp.mean(post['beta'], axis=0)
+    return b_hat, beta_hat, post
+
+def cluster_from_random_slopes(b_hat, n_clusters, pca_components=5):
+    # to numpy
+    X = onp.array(b_hat)  # shape (n_series, P)
+    scaler = StandardScaler()
+    Xs = scaler.fit_transform(X)
+    if pca_components is not None and pca_components < Xs.shape[1]:
+        pca = PCA(n_components=pca_components)
+        Z = pca.fit_transform(Xs)
+    else:
+        Z = Xs
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+    labels = kmeans.fit_predict(Z)
+    return labels  # array of cluster assignments per series index
+
 # 4. Iterative clustering by goodness-of-fit
 def time_clustering(data, time_col, value_col, series_col,
-                    n_clusters=4, spline_df=5, spline_degree=3, rng_seed=0):
+                    n_clusters=4, spline_df=5, spline_degree=3, rng_seed=0, 
+                    adaptive_spline=True, how: Literal['normal', 'slope']='normal',
+                    num_samples=1500, normalize=True):
     # check if n_clusters is even number
     assert (n_clusters % 2 == 0), "n_clusters should be even"
 
     clusters = []
-    remaining = data.copy()
+
+    if normalize:
+        remaining = data.copy()
+        remaining.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+    else:
+        remaining = data.copy()
     rng_key = jax.random.PRNGKey(rng_seed)
     k = 0
-    num_size_cluster = int(remaining[series_col].nunique()/n_clusters)
-    while True:
-        series_ids = remaining[series_col].unique()
-        n_series = len(series_ids)
-        
-        if n_series == 0:
-            break
-        
-        if len(clusters)>=n_clusters:
-            # put remaining ids in remainder_cluster
-            print(f"Assigned {n_clusters} clusters, assigning remaning {n_series} series to remainder clusters")
-            clusters.append(list(series_ids))
-            return clusters 
+    if how=='normal':
+        num_size_cluster = int(remaining[series_col].nunique()/n_clusters)
+        while True:
+            series_ids = remaining[series_col].unique()
+            n_series = len(series_ids)
+            
+            if n_series == 0:
+                break
+            
+            if len(clusters)>=n_clusters:
+                # put remaining ids in remainder_cluster
+                print(f"Assigned {n_clusters} clusters, assigning remaning {n_series} series to remainder clusters")
+                clusters.append(list(series_ids))
+                return clusters 
 
+            id_map = {sid: i for i, sid in enumerate(series_ids)}
+            inv_id_map = {i: sid for i, sid in enumerate(series_ids)}
+            remaining['series_idx'] = remaining[series_col].map(id_map)
+            time_grid = onp.sort(remaining[time_col].unique())
+            B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree, adaptive=adaptive_spline)
+            # map each obs to basis row
+            time_to_idx = {t: i for i, t in enumerate(time_grid)}
+            idxs = remaining[time_col].map(time_to_idx).values
+            B_obs = B_grid[idxs]
+
+            rmse_p, rmse_n = fit_lmm(B_obs, remaining[value_col].to_numpy(),
+                        remaining['series_idx'].to_numpy(), n_series, rng_key, num_samples=num_samples)
+            
+            cut = num_size_cluster
+            
+            if rmse_p.shape[0]>0:
+                best_series_p = rmse_p.nsmallest(cut).index.tolist()
+                best_rmse_p = rmse_p.loc[best_series_p].min()
+                res_p = [*map(inv_id_map.get, best_series_p)]      
+                print(f"cl pos: {len(res_p)}")
+                clusters.append(res_p)
+            else:
+                best_series_p = []
+
+            if rmse_n.shape[0]>0:
+                best_series_n = rmse_n.nsmallest(cut).index.tolist()
+                best_rmse_n = rmse_n.loc[best_series_n].min()
+                res_n = [*map(inv_id_map.get, best_series_n)]      
+                print(f"cl neg: {len(res_n)}")
+                clusters.append(res_n)
+            else:
+                best_series_n = []
+
+            remaining = remaining[(~remaining['series_idx'].isin(best_series_n)) 
+                                & (~remaining['series_idx'].isin(best_series_p))]
+            print(f"# series: {n_series}, remaining: {remaining[series_col].nunique()}, RMSE_p: {best_rmse_p}, RMSE_n: {best_rmse_n}")
+
+            k += 1
+    elif how=='slope':
+        series_ids = data[series_col].unique()
+        n_series = len(series_ids)
         id_map = {sid: i for i, sid in enumerate(series_ids)}
         inv_id_map = {i: sid for i, sid in enumerate(series_ids)}
-        remaining['series_idx'] = remaining[series_col].map(id_map)
-        time_grid = onp.sort(remaining[time_col].unique())
-        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree)
+        data['series_idx'] = data[series_col].map(id_map)
+        
+        time_grid = onp.sort(data[time_col].unique())
+        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree, adaptive=adaptive_spline)
         # map each obs to basis row
         time_to_idx = {t: i for i, t in enumerate(time_grid)}
-        idxs = remaining[time_col].map(time_to_idx).values
+        idxs = data[time_col].map(time_to_idx).values
         B_obs = B_grid[idxs]
 
-        rmse_p, rmse_n = fit_lmm(B_obs, remaining[value_col].to_numpy(),
-                       remaining['series_idx'].to_numpy(), n_series, rng_key)
-        
-        cut = num_size_cluster
-        
-        if rmse_p.shape[0]>0:
-            best_series_p = rmse_p.nsmallest(cut).index.tolist()
-            best_rmse_p = rmse_p.loc[best_series_p].min()
-            res_p = [*map(inv_id_map.get, best_series_p)]      
-            print(f"cl pos: {len(res_p)}")
-            clusters.append(res_p)
-        else:
-            best_series_p = []
+        b_hat, _, _ = fit_lmm_random_slopes(B_obs, data[value_col].to_numpy(),
+                        data['series_idx'].to_numpy(), n_series, rng_key, num_samples=1500)
+        _clusters = cluster_from_random_slopes(b_hat, n_clusters=n_clusters, pca_components=None)
+        cluster_d = dict(zip([*map(inv_id_map.get, data['series_idx'].to_numpy())] , _clusters))
 
-        if rmse_n.shape[0]>0:
-            best_series_n = rmse_n.nsmallest(cut).index.tolist()
-            best_rmse_n = rmse_n.loc[best_series_n].min()
-            res_n = [*map(inv_id_map.get, best_series_n)]      
-            print(f"cl neg: {len(res_n)}")
-            clusters.append(res_n)
-        else:
-            best_series_n = []
+        clusters = [[] for _ in range(n_clusters)]
+        for _id, _clust in cluster_d.items():
+            clusters[_clust] =  clusters[_clust] + [_id]
 
-        remaining = remaining[(~remaining['series_idx'].isin(best_series_n)) 
-                            & (~remaining['series_idx'].isin(best_series_p))]
-        print(f"# series: {n_series}, remaining: {remaining[series_col].nunique()}, RMSE_p: {best_rmse_p}, RMSE_n: {best_rmse_n}")
-
-        k += 1
     return clusters
 
 

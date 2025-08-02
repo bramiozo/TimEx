@@ -19,7 +19,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import adjusted_mutual_info_score
 
 from typing import Literal
-
+from sklego.meta import GroupedTransformer
+from sklearn.preprocessing import StandardScaler
 
 numpyro.set_host_device_count(1)
 
@@ -216,7 +217,8 @@ def random_intercept_lmm_model(spline_basis, y, series_idx, n_series):
 def fit_lmm_and_cluster(data, time_col, value_col, series_col,
                         spline_df=5, spline_degree=3,
                         n_clusters=3, rng_seed=0,
-                        num_warmup=500, num_samples=1000, 
+                        num_warmup=500, num_samples=1590, 
+                        normalize=True,
                         cluster_method: Literal['gmm', 'kmeans']='gmm'):
     """
     1. Fit one LMM across all series.
@@ -224,6 +226,10 @@ def fit_lmm_and_cluster(data, time_col, value_col, series_col,
     3. Cluster those random-effects vectors via KMeans.
     Returns: dict mapping series_id -> cluster label
     """
+
+    if normalize:
+        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+
     # Prepare series indices
     series_ids = data[series_col].unique()
     id_map = {sid: i for i, sid in enumerate(series_ids)}
@@ -260,15 +266,22 @@ def fit_lmm_and_cluster(data, time_col, value_col, series_col,
         gmm = GaussianMixture(n_components=n_clusters, random_state=0)
         labels = gmm.fit_predict(features)
 
-    return {sid: int(labels[id_map[sid]]) for sid in series_ids}
+    cluster_d =  {sid: int(labels[id_map[sid]]) for sid in series_ids}
+    clusters = [[] for _ in range(n_clusters)]
+    for _id, _clust in cluster_d.items():
+        clusters[_clust] =  clusters[_clust] + [_id]
+    return clusters
 
 def two_stage_growth_mixture(
     data, time_col, value_col, series_col,
     spline_df=5, spline_degree=3,
     n_clusters=3, rng_seed=0,
     num_warmup=500, num_samples=1000,
-    cluster_method: Literal['gmm', 'kmeans']='gmm'
+    normalize=True, cluster_method: Literal['gmm', 'kmeans']='gmm'
 ):
+    if normalize:
+        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+
     # === Prepare design matrices ===
     series_ids = data[series_col].unique()
     id_map = {sid: i for i, sid in enumerate(series_ids)}
@@ -312,8 +325,11 @@ def two_stage_growth_mixture(
         gmm = GaussianMixture(n_components=n_clusters, random_state=0)
         labels = gmm.fit_predict(features)
 
-
-    return {sid: int(labels[idx]) for sid, idx in id_map.items()}
+    cluster_d = {sid: int(labels[idx]) for sid, idx in id_map.items()}
+    clusters = [[] for _ in range(n_clusters)]
+    for _id, _clust in cluster_d.items():
+        clusters[_clust] =  clusters[_clust] + [_id]
+    return clusters
 
 
 def fit_lcmm(
@@ -328,8 +344,13 @@ def fit_lcmm(
     num_warmup: int = 500,
     num_samples: int = 1_500,
     num_chains: int = 1,
-    discrete: bool = False 
+    discrete: bool = False,
+    normalize: bool = True
 ):
+    
+    if normalize:
+        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+
     """Fits the mixture LMM and returns modal cluster labels per series."""
 
     # Build a B‑spline basis with patsy
@@ -472,7 +493,14 @@ def fit_lcmm(
                     for i in range(len(series_ids))
                 ]
 
-    return {sid: int(z_mode[i]) for sid, i in id_map.items()}
+    cluster_d = {sid: int(z_mode[i]) for sid, i in id_map.items()}
+    clusters = [[] for _ in range(n_clusters)]
+    for _id, _clust in cluster_d.items():
+        clusters[_clust] =  clusters[_clust] + [_id]
+    return clusters
+
+
+
 
 def fit_lcmm_vi(
     data,
@@ -485,8 +513,12 @@ def fit_lcmm_vi(
     rng_seed=0,
     num_steps=5_000,
     discrete: bool = False,
-    tau_search: bool = False
+    tau_search: bool = False,
+    normalize: bool=True,
 ):
+    if normalize:
+        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+
     # Build spline basis as before...
     time_grid = onp.sort(onp.unique(data[time_col].values))
     spline_formula = f"bs(x, df={spline_df}, degree={spline_degree}, include_intercept=True) - 1"
@@ -588,12 +620,22 @@ def fit_lcmm_vi(
                     for i in range(len(series_ids))
                 ]
 
-    return {sid: int(z_mode[i]) for sid, i in id_map.items()}
+    cluster_d = {sid: int(z_mode[i]) for sid, i in id_map.items()}
+    clusters = [[] for _ in range(n_clusters)]
+    for _id, _clust in cluster_d.items():
+        clusters[_clust] =  clusters[_clust] + [_id]
+    return clusters
 
 
 def fpca_clustering(data, time_col, value_col, series_col,
                     n_components=5, n_clusters=3, rng_seed=7, 
+                    normalize=True,
                     cluster_method: Literal['gmm', 'kmeans']='gmm'):
+    
+    if normalize:
+        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+
+    #  this requires that each series is of equal length, i.e. for heterogeneous data is requires, at least, interpolation.
     pivot = data.pivot(index=series_col, columns=time_col, values=value_col)
     pivot = pivot.sort_index(axis=1)
     X = pivot.values
@@ -611,7 +653,12 @@ def fpca_clustering(data, time_col, value_col, series_col,
         gmm = GaussianMixture(n_components=n_clusters, random_state=rng_seed)
         labels = gmm.fit_predict(scores)
 
-    return dict(zip(pivot.index.tolist(), labels)), pca, scores
+    cluster_d =dict(zip(pivot.index.tolist(), labels))
+    clusters = [[] for _ in range(n_clusters)]
+    for _id, _clust in cluster_d.items():
+        clusters[_clust] =  clusters[_clust] + [_id]
+    return clusters
+    
 
 
 if __name__ == "__main__":
