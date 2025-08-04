@@ -171,7 +171,6 @@ def mixture_lmm_model(
         numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
 
 
-
 def lmm_model(spline_basis, y, series_idx, n_series):
     """
     Linear mixed model: global spline fixed effects + per-series random spline offsets.
@@ -626,39 +625,6 @@ def fit_lcmm_vi(
         clusters[_clust] =  clusters[_clust] + [_id]
     return clusters
 
-
-def fpca_clustering(data, time_col, value_col, series_col,
-                    n_components=5, n_clusters=3, rng_seed=7, 
-                    normalize=True,
-                    cluster_method: Literal['gmm', 'kmeans']='gmm'):
-    
-    if normalize:
-        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
-
-    #  this requires that each series is of equal length, i.e. for heterogeneous data is requires, at least, interpolation.
-    pivot = data.pivot(index=series_col, columns=time_col, values=value_col)
-    pivot = pivot.sort_index(axis=1)
-    X = pivot.values
-
-    X_centered = X - X.mean(axis=1, keepdims=True)
-
-    pca = PCA(n_components=n_components)
-    scores = pca.fit_transform(X_centered)
-
-    if cluster_method=='kmeans':
-        # KMeans clustering in feature space
-        kmeans = KMeans(n_clusters=n_clusters, random_state=rng_seed)
-        labels = kmeans.fit_predict(scores)
-    elif cluster_method=='gmm':
-        gmm = GaussianMixture(n_components=n_clusters, random_state=rng_seed)
-        labels = gmm.fit_predict(scores)
-
-    cluster_d =dict(zip(pivot.index.tolist(), labels))
-    clusters = [[] for _ in range(n_clusters)]
-    for _id, _clust in cluster_d.items():
-        clusters[_clust] =  clusters[_clust] + [_id]
-    return clusters
-    
 
 
 if __name__ == "__main__":

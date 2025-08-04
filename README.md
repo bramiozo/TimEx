@@ -122,8 +122,10 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 **Algorithm timex-cluster-2**
 
 1. **Model**; regress a model on all series
-2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors
-3. **Model**; 
+2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors, select the the top-$K$ largest positive/negative errors as two seperate clusters
+3. **Model**; regress a model on the remaining timeseries
+* Repeated 2->3 until all timeseries in the group are assigned to a cluster
+
 
 
 # Benchmarking
@@ -144,6 +146,9 @@ res = UCRBench.go(Methods)
 We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. Again, we allow for "heterogenisation" through random pruning of the time series. 
 
 
+# Tip
+
+For more comprehensive model-based clustering techniques we refer the user to ```mixtools```, ```flexmix```, ```mclust```,  ```lcmm``` and ```latrend```, all R-packages.
 
 # Acknowledgments
 

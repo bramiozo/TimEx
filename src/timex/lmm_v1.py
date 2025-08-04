@@ -63,6 +63,8 @@ def lmm_model(spline_basis, y, series_idx, n_series):
     mu = jnp.dot(spline_basis, beta) + re[series_idx]
     numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
 
+
+
 def lmm_model_random_slopes(spline_basis, y, series_idx, n_series):
     # spline_basis: (N, P), series_idx: (N,), y: (N,)
     N, P = spline_basis.shape
@@ -138,7 +140,7 @@ def cluster_from_random_slopes(b_hat, n_clusters, pca_components=5):
 def time_clustering(data, time_col, value_col, series_col,
                     n_clusters=4, spline_df=5, spline_degree=3, rng_seed=0, 
                     adaptive_spline=True, how: Literal['normal', 'slope']='normal',
-                    num_samples=1500, normalize=True):
+                    num_samples=1500, normalize=True, direction='outwards'):
     # check if n_clusters is even number
     assert (n_clusters % 2 == 0), "n_clusters should be even"
 
@@ -182,7 +184,10 @@ def time_clustering(data, time_col, value_col, series_col,
             cut = num_size_cluster
             
             if rmse_p.shape[0]>0:
-                best_series_p = rmse_p.nsmallest(cut).index.tolist()
+                if direction == 'outwards':
+                    best_series_p = rmse_p.nsmallest(cut).index.tolist()
+                elif direction == 'inwards':
+                    best_series_p = rmse_p.nlargest(cut).index.tolist()
                 best_rmse_p = rmse_p.loc[best_series_p].min()
                 res_p = [*map(inv_id_map.get, best_series_p)]      
                 print(f"cl pos: {len(res_p)}")
@@ -191,7 +196,10 @@ def time_clustering(data, time_col, value_col, series_col,
                 best_series_p = []
 
             if rmse_n.shape[0]>0:
-                best_series_n = rmse_n.nsmallest(cut).index.tolist()
+                if direction == 'outwards':
+                    best_series_n = rmse_n.nsmallest(cut).index.tolist()
+                elif direction == 'inwards':
+                    best_series_n = rmse_n.nlargest(cut).index.tolist()
                 best_rmse_n = rmse_n.loc[best_series_n].min()
                 res_n = [*map(inv_id_map.get, best_series_n)]      
                 print(f"cl neg: {len(res_n)}")
