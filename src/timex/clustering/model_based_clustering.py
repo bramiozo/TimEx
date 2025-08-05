@@ -42,9 +42,9 @@ from typing import Literal
 
 numpyro.set_host_device_count(1)
 
-tau0      = 1.0        # start temperature
+tau0      = 10.0        # start temperature
 tau_min   = 0.1        # end temperature
-T_max     = 2000       # total VI iterations
+T_max     = 100       # total VI iterations
 
 def get_tau(step):
     # linear decay:
@@ -63,7 +63,7 @@ def build_spline_basis(time, df=5, degree=3, adaptive=False):
     returns: (T, P) design matrix
     """
     if not adaptive:
-        dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True)",
+        dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True) -1",
                      {"x": time}, return_type="dataframe")
     else:
         # target number of output columns to mirror original behavior: bs(..., df=df) gave df+1 columns
@@ -75,27 +75,28 @@ def build_spline_basis(time, df=5, degree=3, adaptive=False):
         if n_interior > 0:
             probs = onp.linspace(0, 1, n_interior + 2)[1:-1]  # skip 0 and 1
             knots = onp.quantile(time, probs)
-            dm = dmatrix(f"bs(x, degree={degree}, include_intercept=True, knots={list(knots)})",
+            dm = dmatrix(f"bs(x, degree={degree}, include_intercept=True, knots={list(knots)}) -1",
                          {"x": time}, return_type="dataframe")
         else:
             # no interior knots case: fall back to simple bs with df to get n_basis columns
-            dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True)",
+            dm = dmatrix(f"bs(x, df={df}, degree={degree}, include_intercept=True) -1",
                          {"x": time}, return_type="dataframe")
     return jnp.array(dm)
 
 # 2. Define linear mixed model in NumPyro
-# def lmm_model(spline_basis, y, series_idx, n_series):
-#     P = spline_basis.shape[1]
-#     sigma_re = numpyro.sample("sigma_re", dist.Exponential(1.0))
-#     with numpyro.plate("series", n_series):
-#         re = numpyro.sample("re", dist.Normal(0, sigma_re))
-#     beta = numpyro.sample("beta", dist.Normal(jnp.zeros(P), jnp.ones(P)))
-#     sigma = numpyro.sample("sigma", dist.Exponential(1.0))
-
-#     mu = jnp.dot(spline_basis, beta) + re[series_idx]
-#     numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
-
 def lmm_model(spline_basis, y, series_idx, n_series):
+    P = spline_basis.shape[1]
+    sigma_re = numpyro.sample("sigma_re", dist.Exponential(1.0))
+    with numpyro.plate("series", n_series):
+        re = numpyro.sample("re", dist.Normal(0, sigma_re))
+
+    beta = numpyro.sample("beta", dist.Normal(jnp.zeros(P), jnp.ones(P)))
+    sigma = numpyro.sample("sigma", dist.Exponential(1.0))
+
+    mu = jnp.dot(spline_basis, beta) + re[series_idx]
+    numpyro.sample("obs", dist.Normal(mu, sigma), obs=y)
+
+def lmm_model_sps(spline_basis, y, series_idx, n_series):
     """
     Linear mixed model: global spline fixed effects + per-series random spline offsets.
     spline_basis: (N_obs, P)
@@ -322,8 +323,6 @@ def lmm_split(spline_basis, y, series_idx, n_series, rng_key,
                        'resid3_neg': jnp.square(resid)*(resid < 0)})
     rmse_pos = df.groupby('series')['resid2_plus'].mean().pow(0.5)
     rmse_neg = df.groupby('series')['resid3_neg'].mean().pow(0.5)
-    #rmse_pos = jnp.sqrt(jnp.mean(jnp.square(resid[resid > 0])))
-    #rmse_neg = jnp.sqrt(jnp.mean(jnp.square(resid[resid < 0])))
 
     return rmse_pos, rmse_neg
 
@@ -336,6 +335,7 @@ def lmm_slopes_res(spline_basis, y, series_idx, n_series, rng_key,
     post = mcmc.get_samples()
     b_hat = jnp.mean(post['b'], axis=0)  # (n_series, P): per-series shape deviations
     beta_hat = jnp.mean(post['beta'], axis=0)
+
     return b_hat, beta_hat, post
 
 
@@ -346,7 +346,8 @@ def lmm_slopes_res(spline_basis, y, series_idx, n_series, rng_key,
 def clustering_mm(data, time_col, value_col, series_col,
                     n_clusters=4, spline_df=5, spline_degree=3, rng_seed=0, 
                     adaptive_spline=True, how: Literal['normal', 'slope']='normal',
-                    num_samples=1500, normalize=True, direction='outwards', cluster_method='gmm', pca_components=10):
+                    num_warmup=500, num_samples=1500, normalize=True, direction='outwards', 
+                    cluster_method='gmm', pca_components=10):
     # check if n_clusters is even number
     assert (n_clusters % 2 == 0), "n_clusters should be even"
 
@@ -385,6 +386,7 @@ def clustering_mm(data, time_col, value_col, series_col,
             idxs = remaining[time_col].map(time_to_idx).values
             B_obs = B_grid[idxs]
 
+            print(f'Running LMM splitter..', flush=True)
             rmse_p, rmse_n = lmm_split(B_obs, remaining[value_col].to_numpy(),
                         remaining['series_idx'].to_numpy(), n_series, rng_key, num_samples=num_samples)
             
@@ -448,7 +450,7 @@ def clustering_mm(data, time_col, value_col, series_col,
         if cluster_method == 'kmeans':
             clusterer = KMeans(n_clusters=n_clusters, random_state=0)
         elif cluster_method == 'gmm':
-            clusterer = GaussianMixture(n_clusters=n_clusters, random_state=0)
+            clusterer = GaussianMixture(n_components=n_clusters, random_state=0)
 
         _clusters = clusterer.fit_predict(Z)
 
@@ -471,13 +473,13 @@ def clustering_mm(data, time_col, value_col, series_col,
 
         # Build spline basis on unique time grid
         time_grid = onp.sort(data[time_col].unique())
-        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree)
+        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree, adaptive=adaptive_spline)
         # Map each observation to its row in the basis
         t2i = {t: i for i, t in enumerate(time_grid)}
         idxs = data[time_col].map(t2i).values
         B_obs = B_grid[idxs]
         
-        kernel = NUTS(lmm_model, init_strategy=init_to_feasible)
+        kernel = NUTS(lmm_model_sps, init_strategy=init_to_feasible)
         mcmc = MCMC(kernel, num_warmup=num_warmup, num_samples=num_samples)
         rng_key = jax.random.PRNGKey(rng_seed)
         mcmc.run(rng_key,
@@ -565,12 +567,15 @@ def clustering_lmm(
     spline_df: int = 5,
     spline_degree: int = 3,
     rng_seed: int = 0,
+    num_steps: int = 2_000,
     num_warmup: int = 500,
     num_samples: int = 1_500,
     num_chains: int = 1,
     discrete: bool = False,
     normalize: bool = True,
+    adaptive_spline: bool = True,
     tau_search: bool = True,
+    tau: float = 0.5,
     vi: bool= False
 ):
     
@@ -581,15 +586,10 @@ def clustering_lmm(
     if vi == False:
         """Fits the mixture LMM and returns modal cluster labels per series."""
 
-        # Build a B‑spline basis with patsy
-        from patsy import dmatrix
+        # Build a B‑spline basis with patsy        
 
         time_grid = onp.sort(onp.unique(data[time_col].values))
-        spline_formula = (
-            f"bs(x, df={spline_df}, degree={spline_degree}, "
-            "include_intercept=True) - 1"
-        )
-        B_grid = dmatrix(spline_formula, {"x": time_grid}).astype(float)
+        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree, adaptive=adaptive_spline)
 
         # Design matrix rows corresponding to observed times
         t2i = {t: i for i, t in enumerate(time_grid)}
@@ -665,7 +665,7 @@ def clustering_lmm(
         else:
             mod = mixture_lmm_model_gumbel
             kernel = NUTS(mixture_lmm_model_gumbel, init_strategy=init_strategy)
-            kwargs = {'tau': 0.1}
+            kwargs = {'tau': tau}
 
         print("Init sampler...", flush=True)
         mcmc = MCMC(
@@ -728,8 +728,8 @@ def clustering_lmm(
     else:
         # Build spline basis as before...
         time_grid = onp.sort(onp.unique(data[time_col].values))
-        spline_formula = f"bs(x, df={spline_df}, degree={spline_degree}, include_intercept=True) - 1"
-        B_grid = dmatrix(spline_formula, {"x": time_grid}).astype(float)
+        B_grid = build_spline_basis(time_grid, df=spline_df, degree=spline_degree, adaptive=adaptive_spline)
+
         t2i = {t: i for i, t in enumerate(time_grid)}
         idxs = data[time_col].map(t2i).values
         B_obs = B_grid[idxs]
@@ -757,7 +757,7 @@ def clustering_lmm(
             kwargs = {}
         else:
             mod = mixture_lmm_model_gumbel
-            kwargs = {'tau': 0.01}
+            kwargs = {'tau': tau}
 
         guide = AutoDiagonalNormal(mod)
         svi = SVI(mod, guide, optimizer, loss=Trace_ELBO())

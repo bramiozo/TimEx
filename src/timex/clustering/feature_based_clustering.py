@@ -13,6 +13,9 @@ import pandas as pd
 
 from typing import List, Literal
 
+from timex import extractor
+from timex import preprocessing
+
 def _linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
     """
     Compute linear CKA similarity between two representations X and Y.
@@ -285,3 +288,17 @@ def multiview_fpca_fusion_clustering(
         clusters[lab].append(sid)
 
     return clusters
+
+
+def clustering_fe(data: pd.DataFrame,
+                  time_col: str,
+                  value_cols: List[str],
+                  series_col: str,
+                  interpolate: bool,
+                  **interpolation_kwargs
+                  ):
+    if interpolate:
+        df_interp = preprocessing.get_interpolated(df, id_col=series_col,
+         time_col=time_col, val_col='eGFR_int', keep_t0_value=True, time_res=30, days_before=0, max_days=max_days, df_out=True).dropna()
+
+    df_interp = df_interp.loc[df_interp.ID.isin(index_1) & df_interp.ID.isin(index_2)]
