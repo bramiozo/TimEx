@@ -16,6 +16,10 @@ from typing import List, Literal
 from timex import extractor
 from timex import preprocessing
 
+# partional
+# hierarchical
+# density-based
+
 def _linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
     """
     Compute linear CKA similarity between two representations X and Y.

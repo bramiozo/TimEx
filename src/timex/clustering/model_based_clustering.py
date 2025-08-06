@@ -349,6 +349,9 @@ def clustering_mm(data, time_col, value_col, series_col,
                     num_warmup=500, num_samples=1500, normalize=True, direction='outwards', 
                     cluster_method='gmm', pca_components=10):
     # check if n_clusters is even number
+    # TODO: timegrid is now set to use all unique timepoints, add warning if this number is high and suggest use
+    #  of interpolation and homogeneous grid
+
     assert (n_clusters % 2 == 0), "n_clusters should be even"
 
     clusters = []
@@ -437,6 +440,7 @@ def clustering_mm(data, time_col, value_col, series_col,
 
         b_hat, _, _ = lmm_slopes_res(B_obs, data[value_col].to_numpy(),
                         data['series_idx'].to_numpy(), n_series, rng_key, num_samples=1500)
+        print(b_hat.shape, flush=True)
         # to numpy
         X = onp.array(b_hat)  # shape (n_series, P)
         scaler = StandardScaler()
@@ -582,6 +586,8 @@ def clustering_lmm(
     if normalize:
         data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
 
+    # TODO: timegrid is now set to use all unique timepoints, add warning if this number is high and suggest use
+    #  of interpolation and homogeneous grid
 
     if vi == False:
         """Fits the mixture LMM and returns modal cluster labels per series."""

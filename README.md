@@ -104,12 +104,13 @@ GBTM, GMM
 * Aeon - clustering methods
 * TScluster - clustering methods
 
+# New methods
 
 ## Greedy
 
 It is relatively easy to come up with greedy algorithms to find the best separation of timeseries; for example
 
-**Algorithm timex-cluster-1**
+**Algorithm timex-greedy-cluster-1**
 
 1. **Init**; randomly select $P$ timeseries (which should be small fraction of the total); determine the $K$ exemplars/groups using MSM (or DTW etc.) and e.g. Affinity Propagation
 2. **Model**; regress a model on each group.
@@ -119,13 +120,35 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 5. **Model**; regress a model on each group
 * Repeat 4->5->4->5 until all timeseries are in the group with the lowest residual
    
-**Algorithm timex-cluster-2**
+**Algorithm timex-greedy-cluster-2**
 
 1. **Model**; regress a model on all series
 2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors, select the the top-$K$ largest positive/negative errors as two seperate clusters
 3. **Model**; regress a model on the remaining timeseries
 * Repeated 2->3 until all timeseries in the group are assigned to a cluster
 
+
+## HMM-based
+
+Ingredients; ```pomegranate```, ```hmmlearn```
+**Algorithm timex-hmm-discrete**
+1. concatenate all timeseries
+2. symbolizer (e.g. SAX)
+3. HMM with K states, initialized with uniform state/emission probas
+4. get states per timeseries
+5. feature: 
+ * extract Bag-of-States; counts per state, ount of state-state transitions -> feature-based clustering
+ * perform DTW with custom cost function; ```python def cost(a, b): return 0 if a == b else 1``` -> TSKMeans etc.
+
+**Algorithm timex-hmm-continuous**
+1. concatenate all timeseries
+2. continuous HMM with K states, initialized with uniform state/emission probas
+3. get states per timeseries
+4. feature: 
+ * extract Bag-of-States; counts per state, ount of state-state transitions -> feature-based clustering
+ * perform DTW with custom cost function; ```python def cost(a, b): return 0 if a == b else 1``` -> TSKMeans etc.
+
+For multivariate, reduce with PCA or CCA.
 
 
 # Benchmarking
