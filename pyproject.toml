@@ -58,10 +58,11 @@ missingno = "^0.5.2"
 umap-learn = "^0.5.7"
 dtwparallel = "^0.9.41"
 transformers = "^4.52.4"
-jax = [
-    { version = "^0.6.2[cuda12]", source=jax, markers = "sys_platform == 'win32' or sys_platform == 'linux'"},
-    { version = "^0.6.2", markers = "sys_platform != 'win32' and sys_platform != 'linux'"}
-]
+jax = "^0.6.2"
+#[
+#    { version = "0.6.2+cuda12", source ='jax', markers = "sys_platform == 'linux'"},
+#    { version = "^0.6.2", markers = "sys_platform != 'linux'"}
+#]
 
 numpyro = "^0.18.0"
 funsor = "^0.4.5"
@@ -79,11 +80,9 @@ build-backend = "poetry.core.masonry.api"
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu121"
 priority = "explicit"
-default = false
-secondary = false
 
 [[tool.poetry.source]]
 name = "jax"
 url = "https://storage.googleapis.com/jax-releases/jax_releases.html"
-default = false
-secondary = false
+priority = "explicit"
+

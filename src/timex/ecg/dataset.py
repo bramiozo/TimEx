@@ -1,6 +1,6 @@
 from site import USER_BASE
 # Complete implementation using neurokit2, scipy, catch22, tsfresh
-from typing import Literal, Dict, List, Annotated, Optional, Sequence, Union, Tuple
+from typing import Literal, Dict, List, Annotated, Optional, Sequence, Union, Tuple, Any
 from numpy import ndarray, concatenate
 import numpy as np
 
@@ -129,12 +129,13 @@ class ECGDataset(Dataset):
         config: Config|Dict|None=None,
         visualisation: bool=False,
         output_dir: str='',
-
         augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
                                      = ['bandpass', 'resampler', 'detrend'],
-        prepping_backend: Literal['v1', 'v2']= 'v1'
+        encode: bool=False,
+        pretrain: bool=False,
+        beat_based_attention_mask: bool=False
         ):
 
         if len(augmentations)>0:
@@ -219,8 +220,9 @@ class ECGDataset(Dataset):
         self.extract_metadata = extract_metadata
         self.visualisation = visualisation
         self.output_dir = output_dir
-        self.prepping_backend = prepping_backend
-
+        self.encode = encode
+        self.pretrain = pretrain
+        self.beat_based_attention_mask = beat_based_attention_mask
 
     def __len__(self):
         return len(self.file_list)
@@ -330,56 +332,65 @@ class ECGDataset(Dataset):
 
         # nan: Handle NaN values and outliers
         if 'nan' in self.preprocessing:
-            print("Processing: NaNs...", flush=True)
+            #print("Processing: NaNs...", flush=True)
             signal = torch.nan_to_num(signal, nan=0.0, posinf=5.0, neginf=-5.0)
 
         # detrend: Remove linear trend
         if 'detrend' in self.preprocessing:
-            print("Processing: detrending...", flush=True)
+            #print("Processing: detrending...", flush=True)
             ecg_preprocessor.apply_detrend(method='sliding_median', order=3, period=100, windows=101, cutsize=250, median_window=30, iterate=5)
             signal = ecg_preprocessor.get()
 
         # powerline: Remove powerline interference (notch filter)
         if ('powerline' in self.preprocessing) | ('notch' in self.preprocessing):
-            print("Processing: powerline...", flush=True)
+            # print("Processing: powerline...", flush=True)
             ecg_preprocessor.apply_notch_filter(freq=50.0, bandwidth=1.0, order=4)
             signal = ecg_preprocessor.get()
 
         # bandpass: Remove baseline wander (high-pass filter simulation)
         if 'bandpass' in self.preprocessing:
-            print("Processing: bandpass...", flush=True)
+            # print("Processing: bandpass...", flush=True)
             ecg_preprocessor.apply_bandpass_filter(lowcut=0.5, highcut=40.0, order=4)
             signal = ecg_preprocessor.get()
 
         # savgol: Apply Savitzky-Golay filter for smoothing
         if 'savgol' in self.preprocessing:
-            print("Processing: Savitzky-Golay...", flush=True)
+            # print("Processing: Savitzky-Golay...", flush=True)
             ecg_preprocessor.apply_savgol_filter(window_length=31, polyorder=3)
             signal = ecg_preprocessor.get()
 
         # resampler: Resample to a standard sampling rate
         if 'resampler' in self.preprocessing:
-            print("Processing: re-sampler...", flush=True)
+            # print("Processing: re-sampler...", flush=True)
             ecg_preprocessor.standardize_sampling_rate(fs_target=self.config.SAMPLING_RATE)
             signal = ecg_preprocessor.get()
 
         if 'peak_trimming' in self.preprocessing:
-            print("Processing: peak_trimming...", flush=True)
+            # print("Processing: peak_trimming...", flush=True)
             ecg_preprocessor.trim_signal()
             signal = ecg_preprocessor.get()
 
         # standardscaler: Standardizesignal
         # truncate: Standardize signal length
         if 'truncate' in self.preprocessing:
-            print("Processing: truncating...", flush=True)
+            # print("Processing: truncating...", flush=True)
             signal = self._standardize_signal_length(signal)
 
         if 'standardscaler' in self.preprocessing:
-            print("Processing: standardscaling...", flush=True)
+            # print("Processing: standardscaling...", flush=True)
             signal = self._standardize_signal_(signal)            
 
         return signal
     
+    def collate(self, batch : Tuple[Any]):
+        unpacked = tuple(zip(*batch))
+        if self.encode and not self.pretrain:
+            ecg_data = torch.stack(unpacked[0], dim=0)
+            ecg_filenames = unpacked[1]
+            return ecg_data, ecg_filenames
+        else:
+            return tuple(map(torch.stack, unpacked))
+        
     @staticmethod
     def visualize(ts: np.ndarray, file_name: str="ecg"):
         # plot in one figure
@@ -554,7 +565,16 @@ class ECGDataset(Dataset):
             else:
                 # If no record, set metadata to None
                 metadata = None
-            return signal, file_path, idx, label, metadata
+            if self.encode:
+                return signal, file_path
+            elif self.pretrain:
+                if self.beat_based_attention_mask:
+                    attention_mask = self.compute_beat_based_attention_mask(signal)                    
+                else:
+                    attention_mask = self.compute_attention_mask_for_padding(signal)
+                return signal, attention_mask, label, file_path, idx, metadata
+            else:
+                return signal, label, file_path, idx, metadata
         except Exception as e:
             raise ValueError(f"Error processing record {idx}: {e}")
 
