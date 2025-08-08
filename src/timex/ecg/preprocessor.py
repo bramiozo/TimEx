@@ -233,6 +233,11 @@ class ECGSignalProcessor:
         for i in range(self.p_signal.shape[0]):
           peaks, _ = find_peaks(signal_np[i], distance=peak_distance, prominence=(prominence))
           dips, _ =  find_peaks(-signal_np[i], distance=dip_distance)
+
+        if len(peaks) == 0 or len(dips) == 0:
+            # If no peaks or dips found, keep the original signal
+            new_signal[i, :] = signal_np[i, :]
+        else:
           start_point = min(peaks[0], dips[0])
           end_point = max(peaks[-1], dips[-1])
           new_signal[i, start_point:end_point] = signal_np[i, start_point:end_point]
