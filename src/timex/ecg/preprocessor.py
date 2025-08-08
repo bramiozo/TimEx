@@ -287,7 +287,7 @@ class ECGSignalProcessor:
 
     def get(self)-> torch.tensor:
         # Convert back if needed
-        if ~isinstance(self.p_signal, torch.Tensor):
-            return torch.tensor(self.p_signal, dtype=torch.float16)
+        if not isinstance(self.p_signal, torch.Tensor):
+            return torch.tensor(self.p_signal, dtype=torch.float32)
         else:
             return self.p_signal
