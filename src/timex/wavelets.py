@@ -1,6 +1,9 @@
+from itertools import permutations, product
 import numpy as np
 import scipy as sc
 import pywt
+import torchaudio
+import torch
 from typing import List, Union, Literal, Generator, Tuple
 
 from scipy.fft import fft, fftfreq
@@ -35,7 +38,7 @@ def make_spectroplot(times, scales, spectrogram, path):
     plt.ylabel("Frequency (Hz)")
     plt.xlabel("Time (s)")
     plt.title(f"Spectrogram for ID: {_id}")
-    plt.savefig(f"{path}/{_id}_spectrogram_wavelet.png")
+    plt.savefig(f"{path}/spectrogram_wavelet.png")
     plt.close()
 
 
@@ -307,28 +310,82 @@ def wavelet_energy(signal, function='mexh', widths=np.arange(1, 10)):
 
     return {'WVL_energy_{k}': v for k, v in enumerate(res)}
 
-def extract_wavelet_features(y, wavelet='db4', level=3, num_features=5):
+def extract_wavelet_features(y: np.ndarray|torch.Tensor, wavelet='db4', level=3, num_features=5, dict_out=False):
     # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
-    y = y - np.mean(y)  # Remove the mean
+
+    if type(y)==torch.Tensor:
+        y = y.numpy()
+
+    #y = y - np.mean(y)  # Remove the mean
 
     # Perform the Discrete Wavelet Transform
-    coeffs = pywt.wavedec(y, wavelet, level=level)
+    coeffs_arr = pywt.wavedec(y, wavelet, level=level)
+    
+    if len(coeffs_arr[0].shape)==1:
+        coeffs_arr[0] = coeffs_arr[0].reshape(1,-1)
+    
+    res_list = []
+    for coeffs in coeffs_arr[0]:
+        # Flatten the list of coefficients into a single array
+        coeffs_flat = np.hstack(coeffs)
 
-    # Flatten the list of coefficients into a single array
-    coeffs_flat = np.hstack(coeffs)
+        # Get the absolute values of the coefficients
+        coeffs_abs = np.abs(coeffs_flat)
 
-    # Get the absolute values of the coefficients
-    coeffs_abs = np.abs(coeffs_flat)
+        # Find the indices of the largest coefficients
+        largest_coeff_indices = np.flip(np.argsort(coeffs_abs))[0:num_features]
 
-    # Find the indices of the largest coefficients
-    largest_coeff_indices = np.flip(np.argsort(coeffs_abs))[0:num_features]
+        # Extract the largest coefficients as features
+        top_coeffs = coeffs_flat[largest_coeff_indices]
 
-    # Extract the largest coefficients as features
-    top_coeffs = coeffs_flat[largest_coeff_indices]
+        res_list.append(top_coeffs)
+    
+    num_channels = len(res_list)
 
-    # Generate feature names for the wavelet features
-    feature_keys = ['Wavelet Coeff ' + str(i+1) for i in range(num_features)]
+    if dict_out:
+        wavelet_dict = dict()
+        for channel, res in enumerate(res_list):
+            # Generate feature names for the wavelet features
+            feature_keys = [f'Wavelet_Coeff_{i+1}_{channel}' for i in range(num_features)]
+            # Create a dictionary for the features
+            wavelet_dict.update({feature_keys[i]: res[i] for i in range(num_features)})
+        return wavelet_dict
+    else:
+        return np.hstack(res_list)
 
-    # Create a dictionary for the features
-    wavelet_dict = {feature_keys[i]: top_coeffs[i] for i in range(num_features)}
-    return wavelet_dict
+def extract_mfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep=20, dict_out=False, **kwargs):
+    # Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    
+    if type(y)==np.ndarray:
+        y = torch.tensor(y)
+
+    mfcc_former = torchaudio.transforms.MFCC(sample_rate=sample_rate, n_mfcc=num_cep, log_mels=False, **kwargs)
+    num_channels = y.shape[0]
+    mfcc_res = mfcc_former(y)
+
+    if dict_out:
+        mfcc_res = mfcc_res.numpy()
+        return {
+            f'mfcc_{channel}_{k}': mfcc_res[channel, k, 0] for channel,k in product(range(num_channels), range(num_cep))
+        }
+    else:
+        return mfcc_res[:,:,0].reshape((num_channels*num_cep,)).numpy()
+
+def extract_lfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep=20, num_filters=32, dict_out=False, **kwargs):
+    # Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    
+    if type(y)==np.ndarray:
+        y = torch.tensor(y)
+
+    lfcc_former = torchaudio.transforms.LFCC(sample_rate=sample_rate, n_filter=num_filters, n_lfcc=num_cep, **kwargs)
+    num_channels = y.shape[0]
+    lfcc_res = lfcc_former(y)
+
+    if dict_out:
+        lfcc_res = lfcc_res.numpy()
+        return {
+            f'lfcc_{channel}_{k}': lfcc_res[channel, k, 0] for channel,k in product(range(num_channels), range(num_cep))
+        }
+    else:
+        return lfcc_res[:,:,0].reshape((num_channels*num_cep,)).numpy()
+    

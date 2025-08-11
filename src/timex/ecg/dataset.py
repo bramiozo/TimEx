@@ -359,17 +359,17 @@ class ECGDataset(Dataset):
             ecg_preprocessor.apply_savgol_filter(window_length=31, polyorder=3)
             signal = ecg_preprocessor.get()
 
-        # resampler: Resample to a standard sampling rate
-        if 'resampler' in self.preprocessing:
-            # print("Processing: re-sampler...", flush=True)
-            ecg_preprocessor.standardize_sampling_rate(fs_target=self.config.SAMPLING_RATE)
-            signal = ecg_preprocessor.get()
-
         if 'peak_trimming' in self.preprocessing:
             # print("Processing: peak_trimming...", flush=True)
             ecg_preprocessor.trim_signal()
             signal = ecg_preprocessor.get()
 
+        # resampler: Resample to a standard sampling rate
+        if 'resampler' in self.preprocessing:
+            # print("Processing: re-sampler...", flush=True)
+            ecg_preprocessor.standardize_sampling_rate(fs_target=self.config.SAMPLING_RATE)
+            signal = ecg_preprocessor.get()
+            
         # standardscaler: Standardizesignal
         # truncate: Standardize signal length
         if 'truncate' in self.preprocessing:

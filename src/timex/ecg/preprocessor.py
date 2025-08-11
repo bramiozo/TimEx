@@ -179,7 +179,7 @@ class ECGSignalProcessor:
 
     def  standardize_sampling_rate(self,
                                    backend: Literal['neurokit2', 'wfdb']='neurokit2', 
-                                   method: Literal['interpolation', 'pandas', 'numpy', 'poly', 'fft']='interpolation',
+                                   method: Literal['interpolation', 'pandas', 'numpy', 'poly', 'fft']='fft',
                                    fs_target: int=500):
         '''
         Apply the wfdb resampler to the ECG signal
@@ -233,14 +233,14 @@ class ECGSignalProcessor:
         for i in range(self.p_signal.shape[0]):
           peaks, _ = find_peaks(signal_np[i], distance=peak_distance, prominence=(prominence))
           dips, _ =  find_peaks(-signal_np[i], distance=dip_distance)
-
-        if len(peaks) == 0 or len(dips) == 0:
-            # If no peaks or dips found, keep the original signal
+          
+          if len(peaks) == 0 or len(dips) == 0:
+                # If no peaks or dips found, keep the original signal
             new_signal[i, :] = signal_np[i, :]
-        else:
-          start_point = min(peaks[0], dips[0])
-          end_point = max(peaks[-1], dips[-1])
-          new_signal[i, start_point:end_point] = signal_np[i, start_point:end_point]
+          else:
+            start_point = min(peaks[0], dips[0])
+            end_point = max(peaks[-1], dips[-1])
+            new_signal[i, start_point:end_point] = signal_np[i, start_point:end_point]
 
         self.p_signal = new_signal
 
