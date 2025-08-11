@@ -20,6 +20,7 @@ from timex import preprocessing
 # hierarchical
 # density-based
 
+
 def _linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
     """
     Compute linear CKA similarity between two representations X and Y.

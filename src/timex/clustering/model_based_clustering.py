@@ -413,11 +413,14 @@ def clustering_mm(data, time_col, value_col, series_col,
                 elif direction == 'inwards':
                     best_series_n = rmse_n.nlargest(cut).index.tolist()
                 best_rmse_n = rmse_n.loc[best_series_n].min()
-                res_n = [*map(inv_id_map.get, best_series_n)]      
+                res_n = [*map(inv_id_map.get, best_series_n)]
+                if len(set(res_p).intersection(set(res_n)))>0:
+                    print(f"Removing overlap: {len(set(res_p).intersection(set(res_n)))}")
+                    res_n = list( set(res_n) - set(res_p))
                 print(f"cl neg: {len(res_n)}")
                 clusters.append(res_n)
             else:
-                best_series_n = []
+                best_series_n = []            
 
             remaining = remaining[(~remaining['series_idx'].isin(best_series_n)) 
                                 & (~remaining['series_idx'].isin(best_series_p))]
@@ -457,12 +460,10 @@ def clustering_mm(data, time_col, value_col, series_col,
             clusterer = GaussianMixture(n_components=n_clusters, random_state=0)
 
         _clusters = clusterer.fit_predict(Z)
-
-        cluster_d = dict(zip([*map(inv_id_map.get, data['series_idx'].to_numpy())] , _clusters))
-
+       
         clusters = [[] for _ in range(n_clusters)]
-        for _id, _clust in cluster_d.items():
-            clusters[_clust] =  clusters[_clust] + [_id]
+        for _id, _clust in enumerate(_clusters):
+            clusters[_clust] =  clusters[_clust] + [inv_id_map[_id]]
     elif how=='random_effect_clustering':
         """
         1. Fit one LMM across all series.
