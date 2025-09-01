@@ -388,8 +388,21 @@ class ECGDataset(Dataset):
             ecg_data = torch.stack(unpacked[0], dim=0)
             ecg_filenames = unpacked[1]
             return ecg_data, ecg_filenames
+        elif not self.pretrain:
+            ecg_data = torch.stack(unpacked[0], dim=0)
+            ecg_labels = unpacked[1] #torch.stack(unpacked[1], dim=0) if self.supervised else None
+            ecg_filenames = unpacked[2]
+            ecg_indices = unpacked[3]
+            ecg_metadata = unpacked[4]
+            return ecg_data, ecg_labels, ecg_filenames, ecg_indices, ecg_metadata
         else:
-            return tuple(map(torch.stack, unpacked))
+            ecg_data = torch.stack(unpacked[0], dim=0)
+            ecg_attn_mask = unpacked[1]
+            ecg_labels = unpacked[2]
+            ecg_filenames = unpacked[3]
+            ecg_indices = unpacked[4]
+            ecg_metadata = unpacked[5]
+            return ecg_data, ecg_attn_mask, ecg_labels, ecg_filenames, ecg_indices, ecg_metadata
         
     @staticmethod
     def visualize(ts: np.ndarray, file_name: str="ecg"):
