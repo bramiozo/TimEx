@@ -4,8 +4,9 @@ from tslearn.piecewise import SymbolicAggregateApproximation, OneD_SymbolicAggre
 from typing import Type, List
 import numpy as np
 import torch
+import warnings
 
-class Word_Tokenizer(PreTrainedTokenizer):
+class ECGTokenizer(PreTrainedTokenizer):
 
     model_input_names = ["input_ids", "attention_mask"]
     prefix_tokens: list[int] = []
@@ -23,16 +24,16 @@ class Word_Tokenizer(PreTrainedTokenizer):
         **kwargs,
     ):
         assert (
-            SAX_List is None
-            or isinstance(SAX_List, OneD_SymbolicAggregateApproximation)
+            isinstance(SAX_List, OneD_SymbolicAggregateApproximation)
             or isinstance(SAX_List, SymbolicAggregateApproximation)
         )
 
         if isinstance(SAX_List, OneD_SymbolicAggregateApproximation):
+            self.SAX_List._is_fitted()
             vocab_size = SAX_List.alphabet_size_avg + SAX_List.alphabet_size_slope
         elif isinstance(SAX_List, SymbolicAggregateApproximation):
+            self.SAX_List._is_fitted()
             vocab_size = SAX_List.alphabet_size_avg
-    
 
         # Special tokens
         bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
@@ -81,26 +82,33 @@ class Word_Tokenizer(PreTrainedTokenizer):
 
     # ---- Hugging Face required methods ----
     def vocab_size(self) -> int:
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         return self._vocab_size
 
     def get_vocab(self):
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         return self.vocab
 
     def _tokenize(self, text: str) -> List[str]:
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         encoding = self.tokenizer.encode(text)
         return encoding.tokens
 
     def _convert_token_to_id(self, token: str) -> int:
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         token_id = self.tokenizer.token_to_id(token)
         return token_id if token_id is not None else self.tokenizer.token_to_id(self.unk_token.content)
 
     def _convert_id_to_token(self, index: int) -> str:
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         return self.tokenizer.id_to_token(index)
 
     def convert_tokens_to_string(self, tokens: List[str]) -> str:
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         return " ".join(tokens)
 
     def _decode(self, token_ids, skip_special_tokens: bool = False, **kwargs):
+        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         special_token_ids = {self.vocab[tok] for tok in ["<unk>", "<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[MASK]"] if tok in self.vocab}
         decoded_word_piece = [self.decoder(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
         #tokens = [self._convert_id_to_token(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
