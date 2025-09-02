@@ -58,7 +58,7 @@ class Word_Tokenizer(PreTrainedTokenizer):
         # Hugging Face tokenizer-core
         self.tokenizer = Tokenizer(models.WordLevel(self.vocab, unk_token="<unk>"))
         self.tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-        self.decoder = decoders.WordPiece()
+        
 
         self.toks_sax = None
         self.toks_sax_inv = None
@@ -100,11 +100,25 @@ class Word_Tokenizer(PreTrainedTokenizer):
     def convert_tokens_to_string(self, tokens: List[str]) -> str:
         return " ".join(tokens)
 
-    def _decode(self, token_ids, skip_special_tokens: bool = False, **kwargs):
+    def _decode(self, token_ids, skip_special_tokens: bool = True, **kwargs):
         special_token_ids = {self.vocab[tok] for tok in ["<unk>", "<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[MASK]"] if tok in self.vocab}
-        decoded_word_piece = [self.decoder(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
-        #tokens = [self._convert_id_to_token(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
-        return decoded_word_piece
+        
+        if hasattr(token_ids, "tolist"):
+            token_ids = token_ids.tolist()
+
+        decoded = []
+        for sequence in token_ids:  
+            filtered_ids = [
+            int(tok_id) for tok_id in sequence
+            if not (skip_special_tokens and int(tok_id) in special_token_ids)]
+            decoded.append(filtered_ids)
+            
+
+        sax_decoded = []
+        for i in range(len(decoded)):
+            sax_decoded.append(self.SAX_List.inverse_transform(np.array(decoded[i]).reshape(-1, 1)).reshape(-1))
+       
+        return sax_decoded
 
     # ---- SAX Tokenization ----
     def tokenize_sax(self, data):
