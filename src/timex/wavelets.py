@@ -360,6 +360,11 @@ def extract_mfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep
         y = torch.tensor(y)
 
     mfcc_former = torchaudio.transforms.MFCC(sample_rate=sample_rate, n_mfcc=num_cep, log_mels=False, **kwargs)
+    
+    if len(y.shape)==1:
+        num_channels = 1
+        y = y.reshape(-1,1)
+
     num_channels = y.shape[0]
     mfcc_res = mfcc_former(y)
 
@@ -378,6 +383,11 @@ def extract_lfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep
         y = torch.tensor(y)
 
     lfcc_former = torchaudio.transforms.LFCC(sample_rate=sample_rate, n_filter=num_filters, n_lfcc=num_cep, **kwargs)
+           
+    if len(y.shape)==1:
+        num_channels = 1
+        y = y.reshape(-1,1)
+
     num_channels = y.shape[0]
     lfcc_res = lfcc_former(y)
 

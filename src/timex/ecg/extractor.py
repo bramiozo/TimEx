@@ -31,8 +31,9 @@ import numba
 from scipy.signal import butter, filtfilt, detrend, savgol_filter
 
 sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
-import extractor
-import wavelets
+
+from timex import extractor
+from timex import wavelets
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
@@ -376,12 +377,20 @@ class ECGxtract():
         return res
 
     def _peak_features(self, signal: ndarray, channel: int):
+        
         pass
-
 
     def _model_features(self, signal: ndarray, channel: int):
         # Extract features using a pre-trained autoencoder
         pass
+
+    def _fcc_features(self, signal: ndarray):
+        mfcc_dict = extractor.extract_mfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, dict_out=True)
+        lfcc_dict = extractor.extract_lfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, num_filters=32, dict_out=True)
+
+        mfcc_dict.update(lfcc_dict)
+
+        return mfcc_dict
 
     def _reg_features(self, signal: ndarray, channel: int):
         _acf_features = acf_features(signal, freq=self.sampling_rate)
@@ -504,7 +513,8 @@ class ECGxtract():
 
     def _extract_features_for_single_channel(self,
                                              TimeSerie: ndarray,
-                                             channel: int) -> ndarray:
+                                             channel: int, 
+                                             one_d: bool) -> ndarray:
         # check if the signal is not empty
         # check if any of the features are empty
 
@@ -563,12 +573,35 @@ class ECGxtract():
                 print(f"Error applying tsfel: {e}\n TimeSerie: {TimeSerie}")
                 raise ValueError("TSFEL feature extraction failed.")
 
+        # if 'peak' in self.extractor_groups:
+        #     try:
+        #         peak_feats = self._peak_features(TimeSerie, channel)
+        #     except Exception as e:
+        #         print(f"Error applying peak features: {e}\n TimeSerie: {TimeSerie}")
+        #         raise ValueError("Peak feature extraction failed.")
+        
+        # if 'model' in self.extractor_groups:
+        #     try:
+        #         model_feats = self._model_features(TimeSerie, channel)
+        #     except Exception as e:
+        #         print(f"Error applying model features: {e}\n TimeSerie: {TimeSerie}")
+        #         raise ValueError("Model feature extraction failed.")
+        
+        if ('fcc' in self.extractor_groups) & (one_d == True):
+            # Placed here because the mfcc/lfcc functions accept multi-channel inputs
+            try:
+                fcc_feats = self._fcc_features(TimeSerie)
+            except Exception as e:
+                print(f"Error applying fcc features: {e}\n TimeSerie: {TimeSerie}")
+                raise ValueError("FCC feature extraction failed.")
+
         _features = {
             **wavelet_feats,
             **extractor_feats,
             **ecg_feats,
             **acf_feats,
-            **tsfel_feats
+            **tsfel_feats,
+            **fcc_feats
         }
         return _features
 
@@ -578,17 +611,28 @@ class ECGxtract():
         features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch)
                     for ch in range(TimeSeries.shape[1])]
 
+        if 'fcc' in self.extractor_groups:
+            # Placed here because the mfcc/lfcc functions accept multi-channel inputs
+            try:
+                fcc_feats = self._fcc_features(TimeSeries)
+            except Exception as e:
+                print(f"Error applying fcc features: {e}\n TimeSerie: {TimeSeries}")
+                raise ValueError("FCC feature extraction failed.")
+
+        features.append(fcc_feats)
+
         # features is a list of dictionaries, merge into on
         _features = {}
         for f in features:
             _features.update(f)
         return _features
 
+    # TODO: parallelized
     def extract_from_list(self, TimeSeries: List[ndarray]) -> List[ndarray]:
         extracted_features = []
         for ts in TimeSeries:
             if ts.ndim == 1:
-                feats = self._extract_features_for_single_channel(ts)
+                feats = self._extract_features_for_single_channel(ts, one_d = True)
             elif ts.ndim == 2:
                 feats = self._extract_single_multichannel(ts)
             else:
