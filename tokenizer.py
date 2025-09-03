@@ -67,6 +67,7 @@ class Word_Tokenizer(PreTrainedTokenizer):
         self.SAX_List = SAX_List
         self.n_segments = self.SAX_List.n_segments
         self.alphabet_size = self.SAX_List.alphabet_size_avg
+        self.max_length = 12*(self.n_segments)
 
         super().__init__(
             bos_token=bos_token,
@@ -102,25 +103,61 @@ class Word_Tokenizer(PreTrainedTokenizer):
 
 
     def _decode(self, token_ids, skip_special_tokens: bool = True, **kwargs):
-        special_token_ids = {self.vocab[tok] for tok in ["<unk>", "<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[MASK]"] if tok in self.vocab}
+        #special_token_ids = {self.vocab[tok] for tok in ["<unk>", "<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[MASK]"] if tok in self.vocab}
         
         if hasattr(token_ids, "tolist"):
             token_ids = token_ids.tolist()
 
-        decoded = []
-        for sequence in token_ids:  
-            filtered_ids = [
-            int(tok_id) for tok_id in sequence
-            if not (skip_special_tokens and int(tok_id) in special_token_ids)]
-            decoded.append(filtered_ids)
+        #decoded = []
+        #for sequence in token_ids:  
+         #   filtered_ids = [
+          #  int(tok_id) for tok_id in sequence
+           # if not (skip_special_tokens and int(tok_id) in special_token_ids)]
+            #decoded.append(filtered_ids)
             
 
         sax_decoded = []
-        for i in range(len(decoded)):
-            sax_decoded.append(self.SAX_List.inverse_transform(np.array(decoded[i]).reshape(-1, 1)).reshape(-1))
+        #for i in range(len(decoded)):
+         #   sax_decoded.append(self.SAX_List.inverse_transform(np.array(decoded[i]).reshape(-1, 1)).reshape(-1))
+        for i in range(len(token_ids)):
+            sax_decoded.append(self.SAX_List.inverse_transform(np.array(token_ids[i]).reshape(-1, 1)).reshape(-1))
        
-        return sax_decoded
+        
+        return np.array(sax_decoded).reshape(len(sax_decoded),12,self.n_segments)
 
+
+     def build_inputs_with_special_tokens(self, data):
+        #Insert [SEP] after every self.n_segment tokens
+        #Insert </s> after every 12*self.n_segment tokens
+        #Single sequence: `[CLS] X </s>`
+        #- pair of sequences: `[CLS] A [SEP] B </s>`
+
+        tokens = data.reshape(len(data), len(data[0])*len(data[0][0]))
+        
+        cls = self.cls_token
+        sep = self.sep_token
+        eos = self.eos_token
+
+        all_sequences = []
+        for seq in tokens:
+
+            new_seq = []  # Start with [CLS]
+            new_seq.append(cls)
+            for i, token in enumerate(seq, 1):
+                token_str = str(token)
+                new_seq.append(token_str)
+
+                next_sep_pos = i % self.n_segments == 0
+                eos_pos = i % (12 * self.n_segments) == 0
+            
+                if eos_pos:
+                    new_seq.append(eos)
+
+                elif next_sep_pos:
+                    new_seq.append(sep)
+
+            all_sequences.append(" ".join(map(str,new_seq)))
+        return all_sequences   
 
     # ---- SAX Tokenization ----
     def tokenize_sax(self, data):
@@ -164,10 +201,8 @@ class Word_Tokenizer(PreTrainedTokenizer):
         self,
         signals,
         symbolizer_model: str,
-        max_length: int = 512,
         padding: bool = True,
         truncation: bool = True,
-        batch_size: int = 3
     ):
 
             all_encodings = []
@@ -187,6 +222,8 @@ class Word_Tokenizer(PreTrainedTokenizer):
             # Convert tokens into a string
             text = self.token_to_string(reshaped)
             
+            #Token sentence with the special tokens
+            sentence_w_st = self.build_inputs_with_special_tokens(reshaped)
 
             # Tokenizer encoding
             for i in range(len(text)):
@@ -195,12 +232,12 @@ class Word_Tokenizer(PreTrainedTokenizer):
                 attention_mask = [1] * len(input_ids)
             
                 # Truncate if necessary
-                if truncation and len(input_ids) > max_length:
-                    input_ids = input_ids[:max_length]
-                    attention_mask = attention_mask[:max_length]
+                if truncation and len(input_ids) > self.max_length:
+                    input_ids = input_ids[:self.max_length]
+                    attention_mask = attention_mask[:self.max_length]
 
                 # Pad if necessary
-                if padding and len(input_ids) < max_length:
+                if padding and len(input_ids) < self.max_length:
                     pad_len = max_length - len(input_ids)
                     input_ids += [self.vocab["<pad>"]] * pad_len
                     attention_mask += [0] * pad_len
@@ -212,4 +249,4 @@ class Word_Tokenizer(PreTrainedTokenizer):
                     })
 
 
-            return all_encodings if len(all_encodings) > 1 else all_encodings[0]
+            return sentence_w_st, all_encodings if len(all_encodings) > 1 else all_encodings[0]
