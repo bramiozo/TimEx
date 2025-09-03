@@ -122,7 +122,7 @@ class Word_Tokenizer(PreTrainedTokenizer):
         for i in range(len(token_ids)):
             sax_decoded.append(self.SAX_List.inverse_transform(np.array(token_ids[i]).reshape(-1, 1)).reshape(-1))
        
-<<<<<<< HEAD
+
         
         return np.array(sax_decoded).reshape(len(sax_decoded),12,self.n_segments)
 
@@ -159,10 +159,6 @@ class Word_Tokenizer(PreTrainedTokenizer):
 
             all_sequences.append(" ".join(map(str,new_seq)))
         return all_sequences   
-=======
-        return sax_decoded
-
->>>>>>> origin/Oykudetachedhead
 
     # ---- SAX Tokenization ----
     def tokenize_sax(self, data):
