@@ -1,8 +1,9 @@
 from tokenizers import Tokenizer, models, pre_tokenizers, decoders, AddedToken
 from transformers import PreTrainedTokenizer
-from tslearn.piecewise import SymbolicAggregateApproximation, OneD_SymbolicAggregateApproximation
+from tslearn.piecewise import SymbolicAggregateApproximation, OneD_SymbolicAggregateApproximation, PiecewiseAggregateApproximation
 from typing import Type, List
 import numpy as np
+import math
 import torch
 import warnings
 
@@ -13,7 +14,7 @@ class ECGTokenizer(PreTrainedTokenizer):
 
     def __init__(
         self,
-        SAX_List: Type[OneD_SymbolicAggregateApproximation] | Type[SymbolicAggregateApproximation] | None = None,
+        SAX_List: Type[OneD_SymbolicAggregateApproximation] | Type[SymbolicAggregateApproximation] | PiecewiseAggregateApproximation | None = None,
         unk_token: str = "<unk>",
         bos_token: str = "<s>",
         eos_token: str = "</s>",
@@ -28,12 +29,17 @@ class ECGTokenizer(PreTrainedTokenizer):
             or isinstance(SAX_List, SymbolicAggregateApproximation)
         )
 
+        self.SAX_List = SAX_List
+
         if isinstance(SAX_List, OneD_SymbolicAggregateApproximation):
             self.SAX_List._is_fitted()
             vocab_size = SAX_List.alphabet_size_avg + SAX_List.alphabet_size_slope
         elif isinstance(SAX_List, SymbolicAggregateApproximation):
             self.SAX_List._is_fitted()
             vocab_size = SAX_List.alphabet_size_avg
+
+        
+
 
         # Special tokens
         bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
@@ -45,7 +51,7 @@ class ECGTokenizer(PreTrainedTokenizer):
         mask_token = AddedToken(mask_token, lstrip=True, rstrip=False) if isinstance(mask_token, str) else mask_token
 
         # Build vocab: numbers 1..vocab_size plus specials
-        self.vocab = {str(i): i + 6 for i in range(1, vocab_size + 1)}
+        self.vocab = {str(i): i + 6 for i in range(0, vocab_size)}
         self.vocab.update({
             "<unk>": 0,
             "<s>": 1,
@@ -65,9 +71,9 @@ class ECGTokenizer(PreTrainedTokenizer):
         self.toks_sax_inv = None
         self.toks_1d = None
         self.toks_1d_inv = None
-        self.SAX_List = SAX_List
         self.n_segments = self.SAX_List.n_segments
         self.alphabet_size = self.SAX_List.alphabet_size_avg
+        self.max_length = 12*(self.n_segments)
 
         super().__init__(
             bos_token=bos_token,
@@ -107,12 +113,61 @@ class ECGTokenizer(PreTrainedTokenizer):
         assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
         return " ".join(tokens)
 
-    def _decode(self, token_ids, skip_special_tokens: bool = False, **kwargs):
-        assert(self.SAX_List._is_fitted()),  "The Symbolizer is not fitted yet!"
+    def _decode(self, token_ids, skip_special_tokens: bool = True, **kwargs):
         special_token_ids = {self.vocab[tok] for tok in ["<unk>", "<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[MASK]"] if tok in self.vocab}
-        decoded_word_piece = [self.decoder(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
-        #tokens = [self._convert_id_to_token(tok_id) for tok_id in token_ids if not (skip_special_tokens and tok_id in special_token_ids)]
-        return decoded_word_piece
+        
+        if hasattr(token_ids, "tolist"):
+            token_ids = token_ids.tolist()
+        #Delete special token ids
+        decoded = []
+        for sequence in token_ids:  
+            filtered_ids = [int(tok_id) for tok_id in sequence
+                 if not (skip_special_tokens and int(tok_id) in special_token_ids)]
+            decoded.append(filtered_ids)
+            
+        #Decode sax/1dsax
+        sax_decoded = []
+        for i in range(len(decoded)):
+            sax_decoded.append(self.SAX_List.inverse_transform(np.array(decoded[i]).reshape(-1, 1)).reshape(-1))
+            
+        
+        return np.array(sax_decoded).reshape(len(sax_decoded),12, )
+       
+
+    def build_inputs_with_special_tokens(self, data):
+        #Insert [SEP] after every self.n_segment tokens
+        #Insert </s> after every 12*self.n_segment tokens
+        #Single sequence: `[CLS] X </s>`
+        #- pair of sequences: `[CLS] A [SEP] B </s>`
+
+        tokens = data.reshape(len(data), len(data[0])*len(data[0][0]))
+        
+        cls = self.cls_token
+        sep = self.sep_token
+        eos = self.eos_token
+
+        all_sequences = []
+        for seq in tokens:
+
+            new_seq = []  # Start with [CLS]
+            new_seq.append(cls)
+            for i, token in enumerate(seq, 1):
+                token_str = str(token)
+                new_seq.append(token_str)
+
+                next_sep_pos = i % self.n_segments == 0
+                eos_pos = i % (12 * self.n_segments) == 0
+            
+                if eos_pos:
+                    new_seq.append(eos)
+
+                elif next_sep_pos:
+                    new_seq.append(sep)
+
+
+            all_sequences.append(" ".join(map(str,new_seq)))
+
+        return all_sequences
 
     # ---- SAX Tokenization ----
     def tokenize_sax(self, data):
@@ -149,36 +204,61 @@ class ECGTokenizer(PreTrainedTokenizer):
             return toks
 
     def token_to_string(self, data):
-        return [" ".join(str(token) for lead in sample for token in lead) for sample in data]
+        return [" ".join(str(token)) for token in data]
+
+    
+    def pad_signal(self, data, target_length):
+        padded_signal = np.zeros((len(data), len(data[0]), target_length))
+        for i in range(len(data)):
+            for j in range(len(data[i])):
+                padded_signal[i][j] = np.pad(data[i][j], (0, max(0, target_length-len(data[i][j]))), 'constant')
+        return padded_signal
+
 
 
     def encode(
         self,
         signals,
         symbolizer_model: str,
-        max_length: int = 512,
         padding: bool = True,
-        truncation: bool = True,
-        batch_size: int = 3
-    ):
+        truncation: bool = True
+    ): 
 
             all_encodings = []
+
+            #Pad time series
+            padded_signals = self.pad_signal(signals, target_length=5000)
+
+            n_padded_segments = np.zeros((len(padded_signals),len(padded_signals[0]), ), dtype = int)
+            for i in range(len(signals)):
+                for j in range(len(signals[0])):
+                    n_padded_segments[i][j] = math.ceil(len(padded_signals[i][j])-len(signals[i][j])/self.n_segments)
+            print(len(n_padded_segments))
             # Tokenize the sample
             if symbolizer_model == "sax":
-                toks, _ = self.tokenize_sax(signals)
+                toks, _ = self.tokenize_sax(padded_signals)
 
             elif symbolizer_model == "1d_sax":
-                toks, _ = self.tokenize_1d_sax(signals)
+                toks, _ = self.tokenize_1d_sax(padded_signals)
 
             else:
                 raise ValueError("symbolizer_model must be either 'sax' or '1d_sax'")
 
             #Reshape
-            reshaped = self.reshape_tokens(toks, len(signals), symbolizer_model)
-
+            print('sax is done')
+            reshaped = self.reshape_tokens(toks, len(padded_signals), symbolizer_model)
+            print('reshape is done')
+            new_segments = []
+            for i in range(len(reshaped)):
+                for j in range(len(reshaped[i])):
+                    new_segments.append(reshaped[i][j][:-n_padded_segments[i][j]]) 
+            print(len(new_segments))
             # Convert tokens into a string
-            text = self.token_to_string(reshaped)
+            text = self.token_to_string(new_segments)
+            print('text is done', text)
             
+            #sentence_w_st = self.build_inputs_with_special_tokens(reshaped)
+
 
             # Tokenizer encoding
             for i in range(len(text)):
@@ -187,13 +267,13 @@ class ECGTokenizer(PreTrainedTokenizer):
                 attention_mask = [1] * len(input_ids)
             
                 # Truncate if necessary
-                if truncation and len(input_ids) > max_length:
-                    input_ids = input_ids[:max_length]
-                    attention_mask = attention_mask[:max_length]
+                if truncation and len(input_ids) > self.max_length:
+                    input_ids = input_ids[:self.max_length]
+                    attention_mask = attention_mask[:self.max_length]
 
                 # Pad if necessary
-                if padding and len(input_ids) < max_length:
-                    pad_len = max_length - len(input_ids)
+                if padding and len(input_ids) < self.max_length:
+                    pad_len = self.max_length - len(input_ids)
                     input_ids += [self.vocab["<pad>"]] * pad_len
                     attention_mask += [0] * pad_len
 
