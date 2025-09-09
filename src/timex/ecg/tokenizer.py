@@ -6,6 +6,7 @@ import numpy as np
 import math
 import torch
 import warnings
+import neurokit2 as nk
 
 class ECGTokenizer(PreTrainedTokenizer):
 
@@ -22,8 +23,10 @@ class ECGTokenizer(PreTrainedTokenizer):
         sep_token: str = "[SEP]",
         mask_token: str = "[MASK]",
         cls_token: str = "[CLS]",
+        beat_based_attention_mask: bool=False,
         **kwargs,
     ):
+        # TODO: implement beat_based_attention_mask
         assert (
             isinstance(SAX_List, OneD_SymbolicAggregateApproximation)
             or isinstance(SAX_List, SymbolicAggregateApproximation)
@@ -33,14 +36,18 @@ class ECGTokenizer(PreTrainedTokenizer):
 
         if isinstance(SAX_List, OneD_SymbolicAggregateApproximation):
             self.SAX_List._is_fitted()
+            self.symbolizer_model = '1dSAX'
             vocab_size = SAX_List.alphabet_size_avg + SAX_List.alphabet_size_slope
         elif isinstance(SAX_List, SymbolicAggregateApproximation):
             self.SAX_List._is_fitted()
+            self.symbolizer_model = 'SAX'
+            vocab_size = SAX_List.alphabet_size_avg
+        elif isintance(SAX_List, PiecewiseAggregateApproximation):
+            self.SAX_List._is_fitted()
+            self.symbolizer_model = 'PAA'
             vocab_size = SAX_List.alphabet_size_avg
 
         
-
-
         # Special tokens
         bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
         eos_token = AddedToken(eos_token, lstrip=False, rstrip=False) if isinstance(eos_token, str) else eos_token
@@ -53,12 +60,13 @@ class ECGTokenizer(PreTrainedTokenizer):
         # Build vocab: numbers 1..vocab_size plus specials
         self.vocab = {str(i): i + 6 for i in range(0, vocab_size)}
         self.vocab.update({
-            "<unk>": 0,
+            "<unk>": 3,
             "<s>": 1,
             "</s>": 2,
-            "<pad>": 3,
+            "<pad>": 0,
             "[CLS]": 4,
-            "[SEP]": 5
+            "[SEP]": 5,
+            "[MASK]": 6
         })
         self._vocab_size = len(self.vocab)
 
@@ -170,36 +178,45 @@ class ECGTokenizer(PreTrainedTokenizer):
         return all_sequences
 
     # ---- SAX Tokenization ----
-    def tokenize_sax(self, data):
+    def tokenize_sax(self, data, decode=False):
         his_dat, his_inv_dat = [], []
         for sig_group in data:
             for sig in sig_group:
                 signal1 = sig.reshape(1, -1)
                 sax_data = self.SAX_List.transform(signal1)
                 his_dat.append(sax_data.reshape(self.n_segments,))
-                sax_inv = self.SAX_List.inverse_transform(sax_data).reshape(-1)
-                his_inv_dat.append(sax_inv)
-        self.toks_sax, self.toks_sax_inv = np.array(his_dat), his_inv_dat
-        return self.toks_sax, self.toks_sax_inv
+                if decode:
+                    sax_inv = self.SAX_List.inverse_transform(sax_data).reshape(-1)
+                    his_inv_dat.append(sax_inv)
+        if decode:
+            self.toks_sax, self.toks_sax_inv = np.array(his_dat), his_inv_dat
+            return self.toks_sax, self.toks_sax_inv
+        else:
+            self.toks_sax = np.array(his_dat)
+            return self.toks_sax 
 
-    def tokenize_1d_sax(self, data):
+    def tokenize_1d_sax(self, data, decode=False):
         his_dat, his_inv_dat = [], []
         for sig_group in data:
             for _, sig in enumerate(sig_group):
                 signal1 = sig.reshape(1, -1)
                 sax_data = self.SAX_List.transform(signal1)
                 his_dat.append(sax_data.reshape(self.n_segments * 2,))
-                sax_inv = self.SAX_List.inverse_transform(sax_data).reshape(-1)
-                his_inv_dat.append(sax_inv)
-        self.toks_1d, self.toks_1d_inv = np.array(his_dat), his_inv_dat
-        return self.toks_1d, self.toks_1d_inv
+                if decode:
+                    sax_inv = self.SAX_List.inverse_transform(sax_data).reshape(-1)
+                    his_inv_dat.append(sax_inv)
+        if decode:
+            self.toks_1d, self.toks_1d_inv = np.array(his_dat), his_inv_dat
+            return self.toks_1d, self.toks_1d_inv
+        else:
+            self.toks_1d = np.array(his_dat)
+            return self.toks_1d       
 
-
-    def reshape_tokens(self,data, n_sig,symbolizer_model):
-        if symbolizer_model == "sax":
+    def reshape_tokens(self,data, n_sig):
+        if self.symbolizer_model in ["SAX", "PAA"]:
             toks = data.reshape(n_sig, 12, self.n_segments)
             return toks
-        if symbolizer_model == "1d_sax":
+        if self.symbolizer_model == "1dSAX":
             toks = data.reshape(n_sig, 12, self.n_segments*2)
             return toks
 
@@ -214,16 +231,14 @@ class ECGTokenizer(PreTrainedTokenizer):
                 padded_signal[i][j] = np.pad(data[i][j], (0, max(0, target_length-len(data[i][j]))), 'constant')
         return padded_signal
 
-
-
     def encode(
         self,
         signals,
-        symbolizer_model: str,
         padding: bool = True,
-        truncation: bool = True
-    ): 
-
+        truncation: bool = True,
+        add_special_tokens: bool=True
+    ):      
+            # TODO: turn off use of inverse transform when encoding...
             all_encodings = []
 
             #Pad time series
@@ -235,30 +250,23 @@ class ECGTokenizer(PreTrainedTokenizer):
                     n_padded_segments[i][j] = math.ceil(len(padded_signals[i][j])-len(signals[i][j])/self.n_segments)
             print(len(n_padded_segments))
             # Tokenize the sample
-            if symbolizer_model == "sax":
+            if self.symbolizer_model in ["SAX", "PAA"]:
                 toks, _ = self.tokenize_sax(padded_signals)
-
-            elif symbolizer_model == "1d_sax":
+            elif self.symbolizer_model == "1dSAX":
                 toks, _ = self.tokenize_1d_sax(padded_signals)
-
             else:
-                raise ValueError("symbolizer_model must be either 'sax' or '1d_sax'")
+                raise ValueError("symbolizer_model must be either 'PAA', 'SAX' or '1dSAX'")
 
             #Reshape
-            print('sax is done')
-            reshaped = self.reshape_tokens(toks, len(padded_signals), symbolizer_model)
-            print('reshape is done')
+            reshaped = self.reshape_tokens(toks, len(padded_signals))
             new_segments = []
             for i in range(len(reshaped)):
                 for j in range(len(reshaped[i])):
                     new_segments.append(reshaped[i][j][:-n_padded_segments[i][j]]) 
-            print(len(new_segments))
             # Convert tokens into a string
             text = self.token_to_string(new_segments)
-            print('text is done', text)
             
             #sentence_w_st = self.build_inputs_with_special_tokens(reshaped)
-
 
             # Tokenizer encoding
             for i in range(len(text)):
@@ -277,6 +285,12 @@ class ECGTokenizer(PreTrainedTokenizer):
                     input_ids += [self.vocab["<pad>"]] * pad_len
                     attention_mask += [0] * pad_len
 
+                if add_special_tokens:
+                    # add special_token_mask
+                    # add token_type_ids
+                    pass
+
+
                 # Append encoding to results
                 all_encodings.append({
                     "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -285,3 +299,73 @@ class ECGTokenizer(PreTrainedTokenizer):
 
 
             return all_encodings if len(all_encodings) > 1 else all_encodings[0]
+    
+    def compute_attention_mask_for_padding(self, array):
+        # TODO: NOT ACTIVE NOW
+        # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+        array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
+        for index in range(array.shape[1]):
+            if np.any(array[:, index]):
+                break
+        start = index
+        for index in range(array.shape[1]-1, -1, -1):
+            if np.any(array[:, index]):
+                break
+        end = index
+        attention_mask = np.zeros(array.shape[1])
+        attention_mask[start:end+1] = 1
+        attention_mask = np.repeat([attention_mask], 12, axis=0)
+        attention_mask = np.concatenate(attention_mask, axis=0)
+        return attention_mask
+
+    def compute_beat_based_attention_mask(self, ecg_data):
+        # TODO: NOT ACTIVE NOW
+        '''
+        Computes attention mask focusing only on P wave, QRS complex and T wave
+        Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
+        '''
+
+        ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
+        _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=self.fs_out) #compute R peaks from II
+        signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
+        signal_dwt['ECG_R_Peaks'] = 0
+        signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
+
+        p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
+        qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
+        t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
+
+        p_starts_stops = p_wave[p_wave != 0].index.tolist()
+        if len(p_starts_stops) % 2 != 0:
+            p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
+        p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
+
+        t_starts_stops = t_wave[t_wave != 0].index.tolist()
+        if len(t_starts_stops) % 2 != 0:
+            t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
+        t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
+
+
+        qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
+        if len(qrs_starts_stops) % 2 != 0:
+            qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
+        qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
+
+        # building the attention mask in order to attend only samples in the p waves
+        for start, stop in p_starts_stops:
+            p_wave.iloc[start : stop] = 1
+
+        # building the attention mask in order to attend only samples in the t waves
+        for start, stop in t_starts_stops:
+            t_wave.iloc[start : stop] = 1
+
+        # building the attention mask in order to attend only samples in the qrs complexes
+        for start, stop in qrs_starts_stops:
+            qrs_complex.iloc[start : stop] = 1
+
+        # global attention mask merging all interest regions
+        attention_mask = (p_wave | t_wave | qrs_complex).tolist()
+        attention_mask = np.repeat([attention_mask], 12, axis=0)
+        attention_mask = np.concatenate(attention_mask, axis=0)
+
+        return attention_mask

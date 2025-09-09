@@ -6,29 +6,29 @@ import numpy as np
 import neurokit2 as nk
 from pycatch22 import catch22_all
 from tsfresh.feature_extraction import extract_features
-from tsfeatures import pacf_features, acf_features, stl_features, hurst
+from tsfeatures import pacf_features, acf_features#, stl_features, hurst
 import tsfel
 import pandas as pd
-import torch
+# import torch
 import os
 import sys
-import gc
-import time
-import wfdb
+# import gc
+# import time
+# import wfdb
 from wfdb.processing import resample_sig # should be default to normalize fs
 import random
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 # PyTorch imports
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-import re
-import h5py
+# import torch.nn as nn
+# import torch.nn.functional as F
+# import torch.optim as optim
+#from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+#import re
+#import h5py
 import numba
-from scipy.signal import butter, filtfilt, detrend, savgol_filter
+#from scipy.signal import butter, filtfilt, detrend, savgol_filter
 
 sys.path.append(os.path.join(os.getcwd(), '..', 'src'))
 
@@ -37,6 +37,33 @@ from timex import wavelets
 
 NDArray2D = Annotated[ndarray, "2-dimensional ndarray"]
 
+ECG_SPECIFIC_NAN_DICT = {k: np.nan for k in ['ECG_Rate_Mean', 'HRV_MeanNN', 'HRV_SDNN', 
+                                             'HRV_SDANN1', 'HRV_SDNNI1', 'HRV_SDANN2', 
+                                             'HRV_SDNNI2', 'HRV_SDANN5', 'HRV_SDNNI5', 
+                                             'HRV_RMSSD', 'HRV_SDSD', 'HRV_CVNN', 'HRV_CVSD',
+                                             'HRV_MedianNN', 'HRV_MadNN', 'HRV_MCVNN',
+                                             'HRV_IQRNN', 'HRV_SDRMSSD', 'HRV_Prc20NN',
+                                             'HRV_Prc80NN', 'HRV_pNN50', 'HRV_pNN20',
+                                             'HRV_MinNN', 'HRV_MaxNN', 'HRV_HTI', 'HRV_TINN',
+                                             'HRV_ULF', 'HRV_VLF', 'HRV_LF', 'HRV_HF',
+                                             'HRV_VHF', 'HRV_TP', 'HRV_LFHF', 'HRV_LFn',
+                                             'HRV_HFn', 'HRV_LnHF', 'HRV_SD1', 'HRV_SD2',
+                                             'HRV_SD1SD2', 'HRV_S', 'HRV_CSI', 'HRV_CVI',
+                                             'HRV_CSI_Modified', 'HRV_PIP', 'HRV_IALS',
+                                             'HRV_PSS', 'HRV_PAS', 'HRV_GI', 'HRV_SI',
+                                             'HRV_AI', 'HRV_PI', 'HRV_C1d', 'HRV_C1a',
+                                             'HRV_SD1d', 'HRV_SD1a', 'HRV_C2d', 'HRV_C2a',
+                                             'HRV_SD2d', 'HRV_SD2a', 'HRV_Cd', 'HRV_Ca',
+                                             'HRV_SDNNd', 'HRV_SDNNa', 'HRV_DFA_alpha1',
+                                             'HRV_DFA_alpha2', 'HRV_ApEn', 'HRV_SampEn',
+                                             'HRV_ShanEn', 'HRV_FuzzyEn', 'HRV_MSEn',
+                                             'HRV_CMSEn', 'HRV_RCMSEn', 'HRV_CD', 'HRV_HFD',
+                                             'HRV_KFD', 'HRV_LZC', 'HRV_MFDFA_alpha1_Width',
+                                             'HRV_MFDFA_alpha1_Peak', 'HRV_MFDFA_alpha1_Mean',
+                                             'HRV_MFDFA_alpha1_Max', 'HRV_MFDFA_alpha1_Delta',
+                                             'HRV_MFDFA_alpha1_Asymmetry',
+                                             'HRV_MFDFA_alpha1_Fluctuation',
+                                             'HRV_MFDFA_alpha1_Increment']}
 
 @numba.njit
 def numba_sanity_check_1d(signal: ndarray) -> bool:
@@ -218,9 +245,11 @@ class ECGxtract():
                  min_window_size: int = 25_000,
                  extractor_type: Literal['catch22', 'tsfresh', 'both'] = 'catch22',
                  aggregation: Literal['concatenate'] = 'concatenate',
-                 extractor_groups: List[Literal['tsfel', 'extractor', 'wavelets', 'ecgspecific', 'acf']] = ['wavelets'],
+                 extractor_groups: List[Literal['tsfel', 'extractor', 'wavelets', 'ecgspecific', 'acf']] = ['wavelets', 'ecgspecific'],
                  trimming_kwargs: Dict = {},
-                 smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3}):
+                 smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3},
+                 add_augmented_signal: bool = True,
+                 pre_cleaned: bool = True):
         """ECGExtract
 
         This class is meant for feature extraction from ECG signals.
@@ -237,7 +266,8 @@ class ECGxtract():
         self.smoothing_kwargs = smoothing_kwargs
         self.extractor_groups = extractor_groups
         self.min_window_size = min_window_size
-
+        self.add_augmented_signal = add_augmented_signal
+        self.pre_cleaned = pre_cleaned
 
     @staticmethod
     def _sanity_check(signal: ndarray) -> bool:
@@ -384,9 +414,9 @@ class ECGxtract():
         # Extract features using a pre-trained autoencoder
         pass
 
-    def _fcc_features(self, signal: ndarray):
-        mfcc_dict = extractor.extract_mfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, dict_out=True)
-        lfcc_dict = extractor.extract_lfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, num_filters=32, dict_out=True)
+    def _fcc_features(self, signal: NDArray2D):
+        mfcc_dict = wavelets.extract_mfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, dict_out=True)
+        lfcc_dict = wavelets.extract_lfcc_features(signal, sample_rate=self.sampling_rate, num_cep=20, num_filters=32, dict_out=True)
 
         mfcc_dict.update(lfcc_dict)
 
@@ -464,7 +494,8 @@ class ECGxtract():
         }
         ################################
         wvc_features = wavelets.extract_wavelet_features(signal, wavelet='db4',
-                                                level=3, num_features=6)
+                                                level=3, num_features=6, dict_out=True)
+        
         fcs_features = extractor.extract_fft_features(signal, num_features=8,
                                              max_frequency=40)
 
@@ -500,21 +531,85 @@ class ECGxtract():
         _features = {f'CHANNEL_{channel}_{k}': v for k, v in _features.items()}
         return _features
 
-    def _ecg_specific_features(self, signal: ndarray, channel: int):
+    def _ecg_specific_features(self, 
+                               signal: ndarray, 
+                               channel: int, 
+                               clean_method: Literal['neurokit',
+                                                     'pantompkins1985',
+                                                     'hamilton2002',
+                                                     'elgendi2010',
+                                                     'engzeemod2012']='neurokit'):
         # Extract ECG-specific features: RR intervals, QRS features
         try:
-            signals, _ = nk.ecg_process(signal, sampling_rate=self.sampling_rate)
-            hr_features = nk.ecg_intervalrelated(signals)
+            if self.pre_cleaned:
+                ecg_cleaned = signal
+            else:
+                ecg_signal = signal_sanitize(ecg_signal)
+                ecg_cleaned = ecg_clean(ecg_signal, 
+                                        sampling_rate=self.sampling_rate, 
+                                        method=clean_method)
+
+            # Detect R-peaks
+            instant_peaks, info = ecg_peaks(
+                ecg_cleaned=ecg_cleaned,
+                sampling_rate=self.sampling_rate,
+                method=method,
+                correct_artifacts=True,
+            )
+
+            # Calculate heart rate
+            rate = signal_rate(
+                info, sampling_rate=self.sampling_rate, desired_length=len(ecg_cleaned)
+            )
+
+            # Assess signal quality
+            quality = ecg_quality(
+                ecg_cleaned, rpeaks=info["ECG_R_Peaks"], sampling_rate=self.sampling_rate
+            )
+
+            # Merge signals in a DataFrame
+            signals = pd.DataFrame(
+                {
+                    "ECG_Raw": ecg_signal,
+                    "ECG_Clean": ecg_cleaned,
+                    "ECG_Rate": rate,
+                    "ECG_Quality": quality,
+                }
+            )
+
+            # Delineate QRS complex
+            delineate_signal, delineate_info = ecg_delineate(
+                ecg_cleaned=ecg_cleaned, rpeaks=info["ECG_R_Peaks"], sampling_rate=self.sampling_rate
+            )
+            info.update(delineate_info)  # Merge waves indices dict with info dict
+
+            # Determine cardiac phases
+            cardiac_phase = ecg_phase(
+                ecg_cleaned=ecg_cleaned,
+                rpeaks=info["ECG_R_Peaks"],
+                delineate_info=delineate_info,
+            )
+
+            # Add additional information to signals DataFrame
+            signals = pd.concat(
+                [signals, instant_peaks, delineate_signal, cardiac_phase], axis=1
+            )
+
+            hr_features = nk.ecg_analyze(signals)
             _features = dict(zip(hr_features.columns, hr_features.values.flatten()))
             _features = {f'CHANNEL_{channel}_{k}': v for k, v in _features.items()}
+
             return _features
         except Exception:
-            return None
+            return ECG_SPECIFIC_NAN_DICT
+
+    def _ecg_STelevation(self, TimeSerie: ndarray,channel: int,):
+        pass
 
     def _extract_features_for_single_channel(self,
                                              TimeSerie: ndarray,
                                              channel: int, 
-                                             one_d: bool) -> ndarray:
+                                             one_d: bool=True) -> ndarray:
         # check if the signal is not empty
         # check if any of the features are empty
 
@@ -541,6 +636,7 @@ class ECGxtract():
         ecg_feats = {}
         acf_feats = {}
         tsfel_feats = {}
+        fcc_feats = {}
         # Extract features based on the selected methods
         if 'wavelets' in self.extractor_groups:
             try:
@@ -587,8 +683,8 @@ class ECGxtract():
         #         print(f"Error applying model features: {e}\n TimeSerie: {TimeSerie}")
         #         raise ValueError("Model feature extraction failed.")
         
-        if ('fcc' in self.extractor_groups) & (one_d == True):
-            # Placed here because the mfcc/lfcc functions accept multi-channel inputs
+        if ('fcc' in self.extractor_groups) and (one_d == True):
+            # Placed here because the mfcc/lfcc functions accept multi-channel input
             try:
                 fcc_feats = self._fcc_features(TimeSerie)
             except Exception as e:
@@ -608,18 +704,28 @@ class ECGxtract():
     def _extract_single_multichannel(self, TimeSeries: NDArray2D) -> ndarray:
         assert TimeSeries.ndim == 2
 
-        features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch)
+        features = [self._extract_features_for_single_channel(TimeSeries[:, ch], channel=ch, one_d=False)
                     for ch in range(TimeSeries.shape[1])]
+
+        if self.add_augmented_signal:
+            aug_signal = np.sum(TimeSeries[:, :], axis=1)
+            extra_features = self._extract_features_for_single_channel(aug_signal, channel=TimeSeries.shape[1]+1, one_d=False)
+            features.append(extra_features)
 
         if 'fcc' in self.extractor_groups:
             # Placed here because the mfcc/lfcc functions accept multi-channel inputs
             try:
-                fcc_feats = self._fcc_features(TimeSeries)
+                if self.add_augmented_signal:
+                    aug_signals = np.hstack([TimeSeries, aug_signal.reshape(-1,1)])
+                    fcc_feats = self._fcc_features(aug_signals)
+                else:
+                    fcc_feats = self._fcc_features(TimeSeries)
+
             except Exception as e:
-                print(f"Error applying fcc features: {e}\n TimeSerie: {TimeSeries}")
+                print(f"Error applying fcc features: {e}")
                 raise ValueError("FCC feature extraction failed.")
 
-        features.append(fcc_feats)
+            features.append(fcc_feats)
 
         # features is a list of dictionaries, merge into on
         _features = {}
@@ -647,31 +753,34 @@ class ECGxtract():
                           FsCol: str='fs') -> Dict[str, ndarray]:
         extracted_features = {}
         for key, ts in tqdm(TimeSeries.items()):
-            self.current_sampling_rate = ts[FsCol]
+            self.current_sampling_rate = ts.get(FsCol, self.sampling_rate)
             self.feature_names = []
-            if ts[SignalCol].ndim == 1:
-                tsignal = ts[SignalCol].T.numpy()
-                # sanitycheck
-                if self.sanity_check==False:
-                    feats = self._extract_features_for_single_channel(tsignal)
-                elif self._sanity_check(tsignal):
-                    feats = self._extract_features_for_single_channel(tsignal)
+            try:
+                if ts[SignalCol].ndim == 1:
+                    tsignal = ts[SignalCol].T.numpy()
+                    # sanitycheck
+                    if self.sanity_check==False:
+                        feats = self._extract_features_for_single_channel(tsignal)
+                    elif self._sanity_check(tsignal):
+                        feats = self._extract_features_for_single_channel(tsignal)
+                    else:
+                        print(f"Signal {key} failed sanity check. Skipping.")
+                        continue
+                elif ts[SignalCol].ndim == 2:
+                    tsignal = ts[SignalCol].T.numpy()
+                    if self.sanity_check==False:
+                        feats = self._extract_single_multichannel(tsignal)
+                    elif self._sanity_check(tsignal):
+                        feats = self._extract_single_multichannel(tsignal)
+                    else:
+                        print(f"Signal {key} failed sanity check. Skipping.")
+                        continue
                 else:
-                    print(f"Signal {key} failed sanity check. Skipping.")
-                    continue
-            elif ts[SignalCol].ndim == 2:
-                tsignal = ts[SignalCol].T.numpy()
-                if self.sanity_check==False:
-                    feats = self._extract_single_multichannel(tsignal)
-                elif self._sanity_check(tsignal):
-                    feats = self._extract_single_multichannel(tsignal)
-                else:
-                    print(f"Signal {key} failed sanity check. Skipping.")
-                    continue
-            else:
-                raise ValueError(f"Unsupported ndarray dimension: {ts[SignalCol].T.ndim}")
+                    raise ValueError(f"Unsupported ndarray dimension: {ts[SignalCol].T.ndim}")
 
-            extracted_features[key] = feats
+                extracted_features[key] = feats
+            except Exception as e:
+                raise ValueError(f'Error: {e}. Key: {key}')
 
         return extracted_features
 

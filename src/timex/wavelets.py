@@ -312,13 +312,13 @@ def wavelet_energy(signal, function='mexh', widths=np.arange(1, 10)):
 
 def extract_wavelet_features(y: np.ndarray|torch.Tensor, wavelet='db4', level=3, num_features=5, dict_out=False):
     # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
-
     if type(y)==torch.Tensor:
         y = y.numpy()
 
     #y = y - np.mean(y)  # Remove the mean
 
     # Perform the Discrete Wavelet Transform
+    
     coeffs_arr = pywt.wavedec(y, wavelet, level=level)
     
     if len(coeffs_arr[0].shape)==1:
@@ -354,10 +354,23 @@ def extract_wavelet_features(y: np.ndarray|torch.Tensor, wavelet='db4', level=3,
         return np.hstack(res_list)
 
 def extract_mfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep=20, dict_out=False, **kwargs):
-    # Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    """
+        Extract MFCC features from multichannel timeseries
+        params: 
+            y: (d, sz) timeseries 
+            sample_rate: int, frequency of signal
+            num_cep: int, number of cepstrals
+            dict_out: bool, return dictionary
+
+        Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    """
     
     if type(y)==np.ndarray:
         y = torch.tensor(y)
+    
+    if y.shape[0]> y.shape[1]:
+        # TODO: HERE WE ASSUME THAT d is ALWAYS > larger than sz, maybe add a warning?
+        y = torch.transpose(y, 0, 1)
 
     mfcc_former = torchaudio.transforms.MFCC(sample_rate=sample_rate, n_mfcc=num_cep, log_mels=False, **kwargs)
     
@@ -377,10 +390,24 @@ def extract_mfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep
         return mfcc_res[:,:,0].reshape((num_channels*num_cep,)).numpy()
 
 def extract_lfcc_features(y: np.ndarray|torch.Tensor, sample_rate=1_024, num_cep=20, num_filters=32, dict_out=False, **kwargs):
-    # Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    """
+        Extract LFCC features from multichannel timeseries
+        params: 
+            y: (d, sz) timeseries 
+            sample_rate: int, frequency of signal
+            num_cep: int, number of cepstrals
+            num_filter: int, number of freq filters
+            dict_out: bool, return dictionary
+
+        Credits: https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dumping.py
+    """
     
     if type(y)==np.ndarray:
         y = torch.tensor(y)
+
+    if y.shape[0]> y.shape[1]:
+        # TODO: HERE WE ASSUME THAT d is ALWAYS > larger than sz, maybe add a warning?
+        y = torch.transpose(y, 0, 1)
 
     lfcc_former = torchaudio.transforms.LFCC(sample_rate=sample_rate, n_filter=num_filters, n_lfcc=num_cep, **kwargs)
            

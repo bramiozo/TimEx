@@ -46,17 +46,25 @@ def whoami(ak=None, sk=None, st=None, region="us-east-1"):
 
 def download_list_mode(s3, bucket_arn: str, output: Path, prefix: Optional[str]):
     paginator = s3.get_paginator("list_objects_v2")
-    kwargs = {"Bucket": bucket_arn}
-    if prefix:
-        kwargs["Prefix"] = prefix
+    kwargs = {"Bucket": bucket_arn, 
+              "RequestPayer": "requester",
+              "Prefix": prefix or ""}
     total = 0
+    # sanity probe
+    print("Probing..")
+    s3.list_objects_v2(Bucket=bucket_arn, MaxKeys=1, RequestPayer="requester")
+    print("---success---")
+    print("Continuing with pagination...")
     for page in paginator.paginate(**kwargs):
         for obj in page.get("Contents", []) or []:
             key = obj["Key"]
             dest = output / key
             ensure_dir(dest)
             print(f"Downloading: {key} -> {dest}")
-            s3.download_file(bucket_arn, key, str(dest))
+            s3.download_file(bucket_arn, 
+                             key, 
+                             str(dest),
+                             ExtraArgs={"RequestPayer": "requester"})
             total += 1
     if total == 0:
         print("No objects found (check prefix/permissions).")
@@ -69,7 +77,10 @@ def download_keys_mode(s3, bucket_arn: str, output: Path, keys_file: Path, strip
         ensure_dir(dest)
         try:
             print(f"Downloading: {key} -> {dest}")
-            s3.download_file(bucket_arn, key, str(dest))
+            s3.download_file(bucket_arn, 
+                             key, 
+                             str(dest),
+                             ExtraArgs={"RequestPayer": "requester"})
             total += 1
         except ClientError as e:
             print(f"ERROR for {key}: {e}", file=sys.stderr)
@@ -81,7 +92,7 @@ def main():
     load_dotenv()
 
     p = argparse.ArgumentParser(description="Download via S3 Access Point. Supports list mode and keys-file (GetObject-only) mode.")
-    p.add_argument("--bucket-arn", required=True)
+    p.add_argument("--bucket-arn", required=False, default=os.getenv("AWS_DEFAULT_ARN", None))
     p.add_argument("--output", required=True)
     p.add_argument("--region", default=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
     p.add_argument("--prefix", default=None, help="Prefix for list mode.")
@@ -105,6 +116,8 @@ def main():
         sys.exit(2)
 
     # warn if caller account != access point account
+    print("Getting identity for sanity check...")
+
     try:
         ident = whoami(ak, sk, st, args.region)
         print(f"Caller identity: {ident['Arn']} (Account {ident['Account']})")
@@ -138,6 +151,7 @@ def main():
         code = e.response.get("Error", {}).get("Code")
         if code == "AccessDenied":
             print("Access denied. If you can’t change the other account, use keys-file mode or request access.", file=sys.stderr)
+            print(f"Full error response: {e.response}", file=sys.stderr)
         sys.exit(1)
 
 
