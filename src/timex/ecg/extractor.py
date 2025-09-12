@@ -225,6 +225,10 @@ def median_power_impl(freqs, power):
     # Should not happen unless power is extremely small
     return freqs[-1]
 
+def convolve_channels(ts: np.ndarray, ts2: np.ndarray):    
+    return np.convolve(ts, ts2, mode='same')
+
+BAND_NAMES = ['I', 'II', 'III', 'AVR', 'AVL', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
 
 class ECGxtract():
@@ -249,7 +253,20 @@ class ECGxtract():
                  trimming_kwargs: Dict = {},
                  smoothing_kwargs: Dict = {'lowcut': 0.5, 'highcut': 40.0, 'order': 3},
                  add_augmented_signal: bool = True,
-                 pre_cleaned: bool = True):
+                 pre_cleaned: bool = True,
+                 band_names: dict={'I': 0,
+                                   'II': 1,
+                                   'III': 2,
+                                   'AVR': 3,
+                                   'AVL': 4,
+                                   'AVF': 5,
+                                   'V1': 6,
+                                   'V2': 7,
+                                   'V3': 8,
+                                   'V4': 9,
+                                   'V5': 10,
+                                   'V6': 11}
+                 ):
         """ECGExtract
 
         This class is meant for feature extraction from ECG signals.
@@ -268,6 +285,20 @@ class ECGxtract():
         self.min_window_size = min_window_size
         self.add_augmented_signal = add_augmented_signal
         self.pre_cleaned = pre_cleaned
+
+        self.band_names = self.process_bandnames(band_names)        
+    
+    def process_bandnames(self, band_names):
+        assert type(band_names)==dict, "Band names should be a dictionary"
+        assert all([k.upper() in BAND_NAMES for k in band_names.keys()]), f'Not all band names in {BAND_NAMES}'
+        assert len(band_names)==12, f'There should be 12 bands, there are {len(band_names)}'
+        return {k.upper(): v for k,v in band_names.items()}
+
+    def __setattr__(self, key, value):
+            if key == "band_names":
+                # you can preprocess the value before assignment
+                value = self.process_bandnames(value)
+            super().__setattr__(key, value)
 
     @staticmethod
     def _sanity_check(signal: ndarray) -> bool:
@@ -708,15 +739,36 @@ class ECGxtract():
                     for ch in range(TimeSeries.shape[1])]
 
         if self.add_augmented_signal:
+            aug_signals = []
             aug_signal = np.sum(TimeSeries[:, :], axis=1)
             extra_features = self._extract_features_for_single_channel(aug_signal, channel=TimeSeries.shape[1]+1, one_d=False)
-            features.append(extra_features)
+
+            aug_signals.append(aug_signal)
+            if (TimeSeries.shape[1] == 12):
+                # add convolutions between signal pairs 
+                # I - v1, II - v2, III - v3
+                c1 = convolve_channels(TimeSeries[:, self.band_names['I']], TimeSeries[:, self.band_names['V1']])
+                c2 = convolve_channels(TimeSeries[:, self.band_names['II']], TimeSeries[:, self.band_names['V2']])
+                c3 = convolve_channels(TimeSeries[:, self.band_names['III']], TimeSeries[:, self.band_names['V3']])
+                aug_signal = c1+c2+c3
+                extra_features = self._extract_features_for_single_channel(aug_signal, channel=TimeSeries.shape[1]+2, one_d=False)
+                features.append(extra_features)
+                aug_signals.append(aug_signal)
+
+                # aVr - V4, aVl - V5, aVf - V6
+                c4 = convolve_channels(TimeSeries[:, self.band_names['AVR']], TimeSeries[:, self.band_names['V4']])
+                c5 = convolve_channels(TimeSeries[:, self.band_names['AVL']], TimeSeries[:, self.band_names['V5']])
+                c6 = convolve_channels(TimeSeries[:, self.band_names['AVF']], TimeSeries[:, self.band_names['V6']])
+                aug_signal = c4+c5+c6
+                extra_features = self._extract_features_for_single_channel(aug_signal, channel=TimeSeries.shape[1]+3, one_d=False)
+                features.append(extra_features)
+                aug_signals.append(aug_signal)
 
         if 'fcc' in self.extractor_groups:
             # Placed here because the mfcc/lfcc functions accept multi-channel inputs
             try:
                 if self.add_augmented_signal:
-                    aug_signals = np.hstack([TimeSeries, aug_signal.reshape(-1,1)])
+                    aug_signals = np.hstack([TimeSeries]+[augs.reshape(-1,1) for augs in aug_signals])
                     fcc_feats = self._fcc_features(aug_signals)
                 else:
                     fcc_feats = self._fcc_features(TimeSeries)
