@@ -756,7 +756,7 @@ class ECGxtract():
                 aug_signals.append(aug_signal)
 
                 # aVr - V4, aVl - V5, aVf - V6
-                c4 = convolve_channels(TimeSeries[:, self.band_names['AVR']], TimeSeries[:, self.band_names['V4']])
+                c4 = convolve_channels(TimeSeries[:, self.band_names['AVR']], -TimeSeries[:, self.band_names['V4']])
                 c5 = convolve_channels(TimeSeries[:, self.band_names['AVL']], TimeSeries[:, self.band_names['V5']])
                 c6 = convolve_channels(TimeSeries[:, self.band_names['AVF']], TimeSeries[:, self.band_names['V6']])
                 aug_signal = c4+c5+c6

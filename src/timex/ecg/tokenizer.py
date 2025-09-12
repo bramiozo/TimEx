@@ -24,7 +24,7 @@ class ECGTokenizer(PreTrainedTokenizer):
         sep_token: str = "[SEP]",
         mask_token: str = "[MASK]",
         cls_token: str = "[CLS]",
-        beat_token: str = "[BEAT]"
+        beat_token: str = "[BEAT]",
         add_beat_mask: bool=False,
         **kwargs,
     ):
@@ -70,7 +70,7 @@ class ECGTokenizer(PreTrainedTokenizer):
             "[CLS]": 4,
             "[SEP]": 5,
             "[MASK]": 6,
-            "[BEAT]", 7
+            "[BEAT]": 7
         })
         self._vocab_size = len(self.vocab)
 
@@ -88,6 +88,8 @@ class ECGTokenizer(PreTrainedTokenizer):
         self.max_length = 12*(self.n_segments)
     
         self.add_beat_mask = add_beat_mask
+        self.beat_token = "[BEAT]"
+        self.beat_token_id = 7
 
         super().__init__(
             bos_token=bos_token,
@@ -97,6 +99,7 @@ class ECGTokenizer(PreTrainedTokenizer):
             sep_token=sep_token,
             mask_token=mask_token,
             cls_token=cls_token,
+            beat_token=beat_token
             **kwargs,
         )
 
