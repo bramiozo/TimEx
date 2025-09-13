@@ -129,7 +129,7 @@ class ECGDataset(Dataset):
         config: Config|Dict|None=None,
         visualisation: bool=False,
         output_dir: str='',
-        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
+        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=[],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
                                      = ['bandpass', 'resampler', 'detrend'],
@@ -322,6 +322,8 @@ class ECGDataset(Dataset):
             signal = torch.cat((signal, pad), dim=1)
         return signal
 
+    def augment_signal(self, signal):
+        pass
 
     def preprocess_signal(self, signal):
         """Enhanced preprocessing with better handling of ECG characteristics"""

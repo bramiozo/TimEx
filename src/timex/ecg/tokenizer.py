@@ -59,9 +59,9 @@ class ECGTokenizer(PreTrainedTokenizer):
         cls_token = AddedToken(cls_token, lstrip=False, rstrip=False) if isinstance(cls_token, str) else cls_token
         sep_token = AddedToken(sep_token, lstrip=False, rstrip=False) if isinstance(sep_token, str) else sep_token
         mask_token = AddedToken(mask_token, lstrip=True, rstrip=False) if isinstance(mask_token, str) else mask_token
-        beat_token = AddenToken(beat_token, lstrip=True, rstrip=False) if isinstance(beat_token, str) else beat_token
+        beat_token = AddedToken(beat_token, lstrip=True, rstrip=False) if isinstance(beat_token, str) else beat_token
         # Build vocab: numbers 1..vocab_size plus specials
-        self.vocab = {str(i): i + 6 for i in range(0, vocab_size)}
+        self.vocab = {str(i): i + 7 for i in range(0, vocab_size)}
         self.vocab.update({
             "<unk>": 3,
             "<s>": 1,
@@ -85,8 +85,9 @@ class ECGTokenizer(PreTrainedTokenizer):
         self.toks_1d_inv = None
         self.n_segments = self.SAX_List.n_segments
         self.alphabet_size = self.SAX_List.alphabet_size_avg
-        self.max_length = 12*(self.n_segments)
-    
+        #self.max_length = 12*(self.n_segments)
+        self.target_length = 5000
+
         self.add_beat_mask = add_beat_mask
         self.beat_token = "[BEAT]"
         self.beat_token_id = 7
@@ -99,7 +100,6 @@ class ECGTokenizer(PreTrainedTokenizer):
             sep_token=sep_token,
             mask_token=mask_token,
             cls_token=cls_token,
-            beat_token=beat_token
             **kwargs,
         )
 
@@ -154,8 +154,8 @@ class ECGTokenizer(PreTrainedTokenizer):
     def build_inputs_with_special_tokens(self, data):
         #Insert [SEP] after every self.n_segment tokens
         #Insert </s> after every 12*self.n_segment tokens
-        #Single sequence: `[CLS] X </s>`
-        #- pair of sequences: `[CLS] A [SEP] B </s>`
+        #Single sequence: `<s> X </s>`
+        #- pair of sequences: `<s> A [SEP] B </s>`
 
         #tokens = data.reshape(len(data), len(data[0])*len(data[0][0]))
         tokens = np.array(data).flatten()
