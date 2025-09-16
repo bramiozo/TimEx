@@ -281,6 +281,9 @@ class ECGTokenizer(PreTrainedTokenizer):
                     padded_signals[i, j, :sig_len] = sig
                     n_padded_elements[i, j] = target_length - sig_len
 
+        padded_signals = np.swapaxes(padded_signals, 1,2)
+        print(f"Padded signals: {padded_signals.shape}")
+
         #print("number of padded elements:", n_padded_elements)
         # Tokenize the sample
         if self.symbolizer_model in ["SAX", "PAA"]:
