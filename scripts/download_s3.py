@@ -60,11 +60,13 @@ def download_list_mode(s3, bucket_arn: str, output: Path, prefix: Optional[str])
             key = obj["Key"]
             dest = output / key
             ensure_dir(dest)
-            print(f"Downloading: {key} -> {dest}")
-            s3.download_file(bucket_arn, 
-                             key, 
-                             str(dest),
-                             ExtraArgs={"RequestPayer": "requester"})
+
+            if not dest.exists():
+                print(f"Downloading: {key} -> {dest}")
+                s3.download_file(bucket_arn, 
+                                key, 
+                                str(dest),
+                                ExtraArgs={"RequestPayer": "requester"})
             total += 1
     if total == 0:
         print("No objects found (check prefix/permissions).")
