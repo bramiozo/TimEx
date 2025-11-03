@@ -129,13 +129,12 @@ class ECGDataset(Dataset):
         config: Config|Dict|None=None,
         visualisation: bool=False,
         output_dir: str='',
-        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=['gauss', 'dropout'],
+        augmentations: List[Literal['gauss', 'shift', 'scale', 'dropout']]=[],
         preprocessing: List[Literal['nan', 'bandpass', 'savgol', 'notch', 'peak_trimming',
                                     'powerline', 'standardscaler', 'resampler', 'truncate', 'detrend']]
                                      = ['bandpass', 'resampler', 'detrend'],
         encode: bool=False,
         pretrain: bool=False,
-        beat_based_attention_mask: bool=False
         ):
 
         if len(augmentations)>0:
@@ -222,7 +221,6 @@ class ECGDataset(Dataset):
         self.output_dir = output_dir
         self.encode = encode
         self.pretrain = pretrain
-        self.beat_based_attention_mask = beat_based_attention_mask
 
     def __len__(self):
         return len(self.file_list)
@@ -324,6 +322,8 @@ class ECGDataset(Dataset):
             signal = torch.cat((signal, pad), dim=1)
         return signal
 
+    def augment_signal(self, signal):
+        pass
 
     def preprocess_signal(self, signal):
         """Enhanced preprocessing with better handling of ECG characteristics"""
@@ -388,8 +388,21 @@ class ECGDataset(Dataset):
             ecg_data = torch.stack(unpacked[0], dim=0)
             ecg_filenames = unpacked[1]
             return ecg_data, ecg_filenames
+        elif not self.pretrain:
+            ecg_data = torch.stack(unpacked[0], dim=0)
+            ecg_labels = unpacked[1] #torch.stack(unpacked[1], dim=0) if self.supervised else None
+            ecg_filenames = unpacked[2]
+            ecg_indices = unpacked[3]
+            ecg_metadata = unpacked[4]
+            return ecg_data, ecg_labels, ecg_filenames, ecg_indices, ecg_metadata
         else:
-            return tuple(map(torch.stack, unpacked))
+            ecg_data = torch.stack(unpacked[0], dim=0)
+            # ecg_attn_mask = unpacked[1]
+            # ecg_labels = unpacked[2]
+            # ecg_filenames = unpacked[3]
+            # ecg_indices = unpacked[4]
+            # ecg_metadata = unpacked[5]
+            return ecg_data #, ecg_attn_mask, ecg_labels, ecg_filenames, ecg_indices, ecg_metadata
         
     @staticmethod
     def visualize(ts: np.ndarray, file_name: str="ecg"):
@@ -405,75 +418,6 @@ class ECGDataset(Dataset):
         
         fig.savefig(f'{file_name}.pdf', dpi=300)
         
-    def compute_attention_mask_for_padding(self, array):
-            # credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
-            array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ
-            for index in range(array.shape[1]):
-                if np.any(array[:, index]):
-                    break
-            start = index
-            for index in range(array.shape[1]-1, -1, -1):
-                if np.any(array[:, index]):
-                    break
-            end = index
-            attention_mask = np.zeros(array.shape[1])
-            attention_mask[start:end+1] = 1
-            attention_mask = np.repeat([attention_mask], 12, axis=0)
-            attention_mask = np.concatenate(attention_mask, axis=0)
-            return attention_mask
-
-    def compute_beat_based_attention_mask(self, ecg_data):
-        '''
-        Computes attention mask focusing only on P wave, QRS complex and T wave
-        Credits:https://github.com/Edoar-do/HuBERT-ECG/blob/master/code/dataset.py
-        '''
-
-        ecg_data = ecg_data.reshape(12, self.config.MAX_OUTPUT_LENGTH)
-        _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=self.fs_out) #compute R peaks from II
-        signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
-        signal_dwt['ECG_R_Peaks'] = 0
-        signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
-
-        p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
-        qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
-        t_wave = signal_dwt['ECG_T_Onsets'] | signal_dwt['ECG_T_Offsets'] # binary serie with 1s where T waves start and stop
-
-        p_starts_stops = p_wave[p_wave != 0].index.tolist()
-        if len(p_starts_stops) % 2 != 0:
-            p_starts_stops.append(min(p_starts_stops[-1]+1, 2499))
-        p_starts_stops = np.array(p_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each P wave detected
-
-        t_starts_stops = t_wave[t_wave != 0].index.tolist()
-        if len(t_starts_stops) % 2 != 0:
-            t_starts_stops.append(min(t_starts_stops[-1]+1, 2499))
-        t_starts_stops = np.array(t_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each T wave detected
-
-
-        qrs_starts_stops = qrs_complex[qrs_complex != 0].index.tolist()
-        if len(qrs_starts_stops) % 2 != 0:
-            qrs_starts_stops.append(min(qrs_starts_stops[-1]+1, 2499))
-        qrs_starts_stops = np.array(qrs_starts_stops).reshape(-1, 2) # list of couples <start, stop> for each QRS complex detected
-
-        # building the attention mask in order to attend only samples in the p waves
-        for start, stop in p_starts_stops:
-            p_wave.iloc[start : stop] = 1
-
-        # building the attention mask in order to attend only samples in the t waves
-        for start, stop in t_starts_stops:
-            t_wave.iloc[start : stop] = 1
-
-        # building the attention mask in order to attend only samples in the qrs complexes
-        for start, stop in qrs_starts_stops:
-            qrs_complex.iloc[start : stop] = 1
-
-        # global attention mask merging all interest regions
-        attention_mask = (p_wave | t_wave | qrs_complex).tolist()
-        attention_mask = np.repeat([attention_mask], 12, axis=0)
-        attention_mask = np.concatenate(attention_mask, axis=0)
-
-        return attention_mask
-
-
     def __getitem__(self, idx:int)-> tuple:
         try:
             file_path = self.file_list[idx]
@@ -568,11 +512,7 @@ class ECGDataset(Dataset):
             if self.encode:
                 return signal, file_path
             elif self.pretrain:
-                if self.beat_based_attention_mask:
-                    attention_mask = self.compute_beat_based_attention_mask(signal)                    
-                else:
-                    attention_mask = self.compute_attention_mask_for_padding(signal)
-                return signal, attention_mask, label, file_path, idx, metadata
+                return signal # , label, file_path, idx, metadata
             else:
                 return signal, label, file_path, idx, metadata
         except Exception as e:

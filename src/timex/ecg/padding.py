@@ -1,3 +1,4 @@
+import numpy as np
 def padding(signal, target_length):  #To be used in a loop with file names. Signal has length 12.
     signal = np.asarray(signal)
     padded_signal = np.zeros((len(signal), target_length)) #Zero array with shape(12,5000)
