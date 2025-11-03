@@ -25,7 +25,7 @@ TS_interp = interpol.fit_transform(TS_data)
 ```
 
 
-# **Smoothing** 
+# **Smoothing**
 
 ```python
 
@@ -62,9 +62,9 @@ Using features from
 * LLM-based bottlenecks??
 * Custom functions: including custom shapelets
 * Neurokit2 for EEG/ECG preprocessing
- 
+
 # **Timeseries distance matrices** (TDM):
-Using 
+Using
 * tslearn
 * sktime
 * aeon
@@ -81,9 +81,9 @@ Using
 
 ## CFE/TDM/DSC -> clustering
 
-Clustering follows the extraction of a distance matrix, either directly created using ```timex.tdm``` methods (i.e. a clustering algorithm with a pre-computed distance matrix), or 
+Clustering follows the extraction of a distance matrix, either directly created using ```timex.tdm``` methods (i.e. a clustering algorithm with a pre-computed distance matrix), or
 
-As clustering methods following CFE, TDM or DSC we have 
+As clustering methods following CFE, TDM or DSC we have
 
 * [SNN](https://github.com/felipeangelimvieira/SharedNearestNeighbors/tree/main)
 * Sklearn clustering methods: OPTICS, k-means
@@ -119,7 +119,7 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 4. **Remix**; shift the timeseries with the highest residuals to the group with the lowest model residual
 5. **Model**; regress a model on each group
 * Repeat 4->5->4->5 until all timeseries are in the group with the lowest residual
-   
+
 **Algorithm timex-greedy-cluster-2**
 
 1. **Model**; regress a model on all series
@@ -136,15 +136,15 @@ Ingredients; ```pomegranate```, ```hmmlearn```
 2. symbolizer (e.g. SAX)
 3. HMM with K states, initialized with uniform state/emission probas
 4. get states per timeseries
-5. feature: 
- * extract Bag-of-States; counts per state, ount of state-state transitions -> feature-based clustering
+5. feature:
+ * extract Bag-of-States; counts per state, count of state-state transitions, etc. -> feature-based clustering
  * perform DTW with custom cost function; ```python def cost(a, b): return 0 if a == b else 1``` -> TSKMeans etc.
 
 **Algorithm timex-hmm-continuous**
 1. concatenate all timeseries
 2. continuous HMM with K states, initialized with uniform state/emission probas
 3. get states per timeseries
-4. feature: 
+4. feature:
  * extract Bag-of-States; counts per state, ount of state-state transitions -> feature-based clustering
  * perform DTW with custom cost function; ```python def cost(a, b): return 0 if a == b else 1``` -> TSKMeans etc.
 
@@ -153,7 +153,7 @@ For multivariate, reduce with PCA or CCA.
 
 # Benchmarking
 
-We use the [UCR time series](https://www.cs.ucr.edu/%7Eeamonn/time_series_data/) archive as a univariate ts benchmark. We allow for "heterogenisation" through random pruning of the time series. 
+We use the [UCR time series](https://www.cs.ucr.edu/%7Eeamonn/time_series_data/) archive as a univariate ts benchmark. We allow for "heterogenisation" through random pruning of the time series.
 
 ```python
 
@@ -166,7 +166,7 @@ Methods = [TSKmeans, TSKernelKmeans]
 res = UCRBench.go(Methods)
 ```
 
-We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. Again, we allow for "heterogenisation" through random pruning of the time series. 
+We use the [MTS collection](https://github.com/MTS-BenchMark/MvTS) as a multivariate ts benchmark. Again, we allow for "heterogenisation" through random pruning of the time series.
 
 
 # Tip
@@ -185,4 +185,4 @@ This library could not have been built without the following libraries
 * Aeon
 * TSlearn
 * TScluster
-  
+* torchaudio
