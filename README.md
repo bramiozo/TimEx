@@ -186,3 +186,6 @@ This library could not have been built without the following libraries
 * TSlearn
 * TScluster
 * torchaudio
+* NumPyro
+* Jax
+* PyMC
