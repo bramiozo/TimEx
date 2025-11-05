@@ -108,7 +108,7 @@ GBTM, GMM
 
 ## Greedy
 
-It is relatively easy to come up with greedy algorithms to find the best separation of timeseries; for example
+It is relatively easy to come up with greedy algorithms to find _some_ separation of timeseries; for example
 
 **Algorithm timex-greedy-cluster-1**
 
