@@ -108,7 +108,7 @@ GBTM, GMM
 
 ## Greedy
 
-It is relatively easy to come up with greedy algorithms to find the best separation of timeseries; for example
+It is relatively easy to come up with greedy algorithms to find _some_ separation of timeseries; for example
 
 **Algorithm timex-greedy-cluster-1**
 
@@ -120,12 +120,18 @@ It is relatively easy to come up with greedy algorithms to find the best separat
 5. **Model**; regress a model on each group
 * Repeat 4->5->4->5 until all timeseries are in the group with the lowest residual
 
+**Downside**: biased towards initial clustering
+
 **Algorithm timex-greedy-cluster-2**
 
 1. **Model**; regress a model on all series
 2. **Split**; divide the series in groups with net positive and net negative sum of the residual errors, select the the top-$K$ largest positive/negative errors as two seperate clusters
 3. **Model**; regress a model on the remaining timeseries
 * Repeated 2->3 until all timeseries in the group are assigned to a cluster
+
+**Downside**: biased toward majority clusters
+
+
 
 
 ## HMM-based
@@ -186,3 +192,6 @@ This library could not have been built without the following libraries
 * TSlearn
 * TScluster
 * torchaudio
+* NumPyro
+* Jax
+* PyMC
