@@ -16,10 +16,6 @@ from typing import List, Literal
 from timex import extractor
 from timex import preprocessing
 
-# partional
-# hierarchical
-# density-based
-
 
 def _linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
     """
@@ -47,13 +43,22 @@ def _linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
         return 0.0
     return hsic / denom
 
-def fpca_clustering(data, time_col, value_col, series_col,
-                    n_components=5, n_clusters=3, rng_seed=7, 
-                    normalize=True,
-                    cluster_method: Literal['gmm', 'kmeans']='gmm'):
-    
+
+def fpca_clustering(
+    data,
+    time_col,
+    value_col,
+    series_col,
+    n_components=5,
+    n_clusters=3,
+    rng_seed=7,
+    normalize=True,
+    cluster_method: Literal["gmm", "kmeans"] = "gmm",
+):
     if normalize:
-        data.loc[:, value_col] = GroupedTransformer(StandardScaler(), groups=series_col).fit_transform(data[[series_col, value_col]])[:,0]
+        data.loc[:, value_col] = GroupedTransformer(
+            StandardScaler(), groups=series_col
+        ).fit_transform(data[[series_col, value_col]])[:, 0]
 
     #  this requires that each series is of equal length and homogeneous
     pivot = data.pivot(index=series_col, columns=time_col, values=value_col)
@@ -65,26 +70,34 @@ def fpca_clustering(data, time_col, value_col, series_col,
     pca = PCA(n_components=n_components)
     scores = pca.fit_transform(X_centered)
 
-    if cluster_method=='kmeans':
+    if cluster_method == "kmeans":
         # KMeans clustering in feature space
         kmeans = KMeans(n_clusters=n_clusters, random_state=rng_seed)
         labels = kmeans.fit_predict(scores)
-    elif cluster_method=='gmm':
+    elif cluster_method == "gmm":
         gmm = GaussianMixture(n_components=n_clusters, random_state=rng_seed)
         labels = gmm.fit_predict(scores)
 
-    cluster_d =dict(zip(pivot.index.tolist(), labels))
+    cluster_d = dict(zip(pivot.index.tolist(), labels))
     clusters = [[] for _ in range(n_clusters)]
     for _id, _clust in cluster_d.items():
-        clusters[_clust] =  clusters[_clust] + [_id]
+        clusters[_clust] = clusters[_clust] + [_id]
     return clusters
-    
+
 
 def multivariate_fpca_clustering(
-    data, time_col, value_cols, series_col,
-    n_components=5, n_clusters=3, rng_seed=7,
-    normalize=True, cluster_method='gmm',
-    n_spline_knots=8, spline_degree=3, ridge_alpha=1e-3
+    data,
+    time_col,
+    value_cols,
+    series_col,
+    n_components=5,
+    n_clusters=3,
+    rng_seed=7,
+    normalize=True,
+    cluster_method="gmm",
+    n_spline_knots=8,
+    spline_degree=3,
+    ridge_alpha=1e-3,
 ):
     # value_cols: list of column names (multivariate)
     # pivot to shape (n_series, n_time, n_vars)
@@ -93,7 +106,7 @@ def multivariate_fpca_clustering(
     n_time = len(time_grid)
     n_vars = len(value_cols)
     series_list = list(series_ids)
-    
+
     # build array: (n_series, n_time, n_vars)
     X = np.empty((len(series_list), n_time, n_vars))
     for vi, var in enumerate(value_cols):
@@ -101,7 +114,7 @@ def multivariate_fpca_clustering(
         pivot = pivot.reindex(index=series_list)  # ensure ordering
         pivot = pivot[time_grid]  # ensure time order
         X[:, :, vi] = pivot.values  # assume no missing values
-    
+
     if normalize:
         # per-variable, per-series z-score (flattened)
         for vi in range(n_vars):
@@ -124,14 +137,14 @@ def multivariate_fpca_clustering(
         for vi in range(n_vars):
             y = X[si, :, vi]
             ridge.fit(B, y)
-            coefs[si, vi * n_basis:(vi + 1) * n_basis] = ridge.coef_
+            coefs[si, vi * n_basis : (vi + 1) * n_basis] = ridge.coef_
 
     # joint PCA on stacked coefficients
     pca = PCA(n_components=n_components, random_state=rng_seed)
     scores = pca.fit_transform(coefs)
 
     # clustering
-    if cluster_method == 'kmeans':
+    if cluster_method == "kmeans":
         model = KMeans(n_clusters=n_clusters, random_state=rng_seed)
         labels = model.fit_predict(scores)
     else:
@@ -142,6 +155,7 @@ def multivariate_fpca_clustering(
     for sid, lab in zip(series_list, labels):
         clusters[lab].append(sid)
     return clusters
+
 
 def multiview_fpca_fusion_clustering(
     data: pd.DataFrame,
@@ -154,9 +168,9 @@ def multiview_fpca_fusion_clustering(
     rng_seed: int = 7,
     normalize: bool = True,
     scale_views: bool = True,
-    fusion_method: Literal['concat', 'pca', 'cca', 'cka'] = 'pca',
-    cca_output: Literal['average', 'concat'] = 'average',
-    cluster_method: Literal['gmm', 'kmeans'] = 'gmm',
+    fusion_method: Literal["concat", "pca", "cca", "cka"] = "pca",
+    cca_output: Literal["average", "concat"] = "average",
+    cluster_method: Literal["gmm", "kmeans"] = "gmm",
 ) -> List[List]:
     """
     Per-variable FPCA + fusion (multi-view) clustering with optional fusion via PCA, CCA, or CKA.
@@ -194,7 +208,7 @@ def multiview_fpca_fusion_clustering(
         # pivot to (series x time)
         pivot = data.pivot(index=series_col, columns=time_col, values=var)
         pivot = pivot.reindex(index=series_list)  # enforce series order
-        pivot = pivot.reindex(columns=time_grid)   # enforce time order
+        pivot = pivot.reindex(columns=time_grid)  # enforce time order
 
         X = pivot.values  # shape: (n_series, n_time)
 
@@ -219,7 +233,7 @@ def multiview_fpca_fusion_clustering(
         per_view_scores.append(scores_var)
 
     # Fuse views
-    if fusion_method == 'concat':
+    if fusion_method == "concat":
         fused = np.hstack(per_view_scores)
         if n_fused_components is not None:
             pca_fuse = PCA(n_components=n_fused_components, random_state=rng_seed)
@@ -227,31 +241,49 @@ def multiview_fpca_fusion_clustering(
         else:
             fused_scores = fused
 
-    elif fusion_method == 'pca':
-        target = n_fused_components if n_fused_components is not None else n_components_per_view
+    elif fusion_method == "pca":
+        target = (
+            n_fused_components
+            if n_fused_components is not None
+            else n_components_per_view
+        )
         fused_all = np.hstack(per_view_scores)
         pca_fuse = PCA(n_components=target, random_state=rng_seed)
         fused_scores = pca_fuse.fit_transform(fused_all)
 
-    elif fusion_method == 'cca':
+    elif fusion_method == "cca":
         if len(per_view_scores) != 2:
-            raise ValueError("CCA fusion requires exactly two views (value_cols must have length 2).")
-        comp = n_fused_components if n_fused_components is not None else n_components_per_view
+            raise ValueError(
+                "CCA fusion requires exactly two views (value_cols must have length 2)."
+            )
+        comp = (
+            n_fused_components
+            if n_fused_components is not None
+            else n_components_per_view
+        )
         cca = CCA(n_components=comp)
-        U, V = cca.fit_transform(per_view_scores[0], per_view_scores[1])  # each is (n_series, comp)
-        if cca_output == 'average':
+        U, V = cca.fit_transform(
+            per_view_scores[0], per_view_scores[1]
+        )  # each is (n_series, comp)
+        if cca_output == "average":
             fused_scores = (U + V) / 2
-        elif cca_output == 'concat':
+        elif cca_output == "concat":
             fused_scores = np.hstack([U, V])
         else:
             raise ValueError(f"Unsupported cca_output: {cca_output}")
 
-    elif fusion_method == 'cka':
+    elif fusion_method == "cka":
         # compute CKA similarities to weight each view
         n_views = len(per_view_scores)
         if n_views == 1:
             fused = per_view_scores[0]
-            fused_scores = fused if n_fused_components is None else PCA(n_components=n_fused_components, random_state=rng_seed).fit_transform(fused)
+            fused_scores = (
+                fused
+                if n_fused_components is None
+                else PCA(
+                    n_components=n_fused_components, random_state=rng_seed
+                ).fit_transform(fused)
+            )
         else:
             # pairwise CKA matrix
             sim_matrix = np.zeros((n_views, n_views))
@@ -278,10 +310,10 @@ def multiview_fpca_fusion_clustering(
         raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
     # Clustering
-    if cluster_method == 'kmeans':
+    if cluster_method == "kmeans":
         model = KMeans(n_clusters=n_clusters, random_state=rng_seed)
         labels = model.fit_predict(fused_scores)
-    elif cluster_method == 'gmm':
+    elif cluster_method == "gmm":
         model = GaussianMixture(n_components=n_clusters, random_state=rng_seed)
         labels = model.fit_predict(fused_scores)
     else:
@@ -295,15 +327,25 @@ def multiview_fpca_fusion_clustering(
     return clusters
 
 
-def clustering_fe(data: pd.DataFrame,
-                  time_col: str,
-                  value_cols: List[str],
-                  series_col: str,
-                  interpolate: bool,
-                  **interpolation_kwargs
-                  ):
+def clustering_feats(
+    data: pd.DataFrame,
+    time_col: str,
+    value_cols: List[str],
+    series_col: str,
+    interpolate: bool,
+    **interpolation_kwargs,
+):
     if interpolate:
-        df_interp = preprocessing.get_interpolated(df, id_col=series_col,
-         time_col=time_col, val_col='eGFR_int', keep_t0_value=True, time_res=30, days_before=0, max_days=max_days, df_out=True).dropna()
+        df_interp = preprocessing.get_interpolated(
+            df,
+            id_col=series_col,
+            time_col=time_col,
+            val_col="eGFR_int",
+            keep_t0_value=True,
+            time_res=30,
+            days_before=0,
+            max_days=max_days,
+            df_out=True,
+        ).dropna()
 
     df_interp = df_interp.loc[df_interp.ID.isin(index_1) & df_interp.ID.isin(index_2)]
