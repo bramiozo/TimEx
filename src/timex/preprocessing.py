@@ -82,7 +82,7 @@ def get_interpolated(
     id_col="ID",
     time_col="Time_days",
     val_col="eGFR_CKDEpi2012",
-    days_before=0,
+    time_before=0,
     max_time=365,
     time_res=7,
     keep_t0_value=False,
@@ -103,8 +103,8 @@ def get_interpolated(
     """
 
     # TODO: implementation version where each ID has it's own max_time
-    trange = np.arange(-days_before, max_time, time_res)
-    if (keep_t0_value) & (days_before > 0):
+    trange = np.arange(-time_before, max_time, time_res)
+    if (keep_t0_value) & (time_before > 0):
         trange = np.insert(trange, 1, 0)
 
     res = {id_col: [], time_col: [], val_col: []}
