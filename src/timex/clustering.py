@@ -17,6 +17,7 @@ from tslearn import clustering as tslearn_clustering
 from sklearn.cluster import GaussianMixture, BayesianGaussianMixture
 from sklearn.base import BaseEstimator, ClusterMixin
 
+# distance based clustering
 class TSKMeans:
     # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.TimeSeriesKMeans.html#tslearn.clustering.TimeSeriesKMeans
     def __init__(self, backend="tslearn", n_clusters=3, **kwargs):
@@ -28,7 +29,7 @@ class TSKMeans:
     def fit(self, ts):
         pass
 
-
+# distance based clustering
 class TSKernelKMeans:
     # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.KernelKMeans.html#tslearn.clustering.KernelKMeans
     def __init__(self):
@@ -37,7 +38,7 @@ class TSKernelKMeans:
     def fit(self, ts):
         pass
 
-
+# distance based clustering
 class TSKShape:
     # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.KShape.html#tslearn.clustering.KShape
     def __init__(self):
@@ -58,6 +59,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         interpolation_resolution: int = 30,
         interpolation_keep_init: bool = False,
         min_measurements_per_id: int = 10,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None,
         n_clusters: int = 3,
         random_state: int = None,
         extractors: List[
@@ -72,12 +75,13 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 "tsfel",
             ]
         ] = None,
-        clustering_algorithm: Literal["gmm", "bgmm"],
+        clustering_algorithm: Literal["gmm", "bgmm", "kmeans", "optics", "hdbscan", "spectral", "hierarchical"],
         normalise_timeseries: Optional[Literal["bulk", "group"]] = None,
         normalisation_method: Optional[Literal["standard", "minmax"]] = None,
         id_column: str,
         time_column: str,
         feature_columns: str,
+        add_ts_meta: bool = False,
     ):
         """
         Initialize the CrossSectionalClustering class.
@@ -93,6 +97,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             interpolation (bool, optional): Whether to interpolate the time series. Defaults to False.
             interpolation_resolution (int, optional): The resolution for interpolation. Defaults to 30.
             min_measurements_per_id (int, optional): The minimum number of measurements per time series. Defaults to 10.
+            min_time (int, optional): The minimum time for time series. Defaults to None.
+            max_time (int, optional): The maximum time for time series. Defaults to None.
             n_clusters (int, optional): The number of clusters to form. Defaults to 3.
             random_state (int, optional): The random state for reproducibility. Defaults to None.
             extractors (List[Literal["custom", "tsfresh", "catch22", "cesium", "antropy", "nolds", "katz", "tsfel"]], optional): The feature extractors to use. Defaults to None.
@@ -101,7 +107,11 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             id_column (str): The column to use for identifying time series.
             time_column (str): The column to use for time information.
             feature_columns (List[str]): The columns to use for feature extraction.
+            add_ts_meta: bool = False: Whether to add time series metadata to the output. Defaults to False.
         """
+        extractors = [e.lower() for e in extractors]
+
+        assert(max_time<= min_time), "Max time has to be equal or smaller than min time"
 
         self.smoothing = smoothing
         self.smoothing_type = smoothing_type
@@ -110,6 +120,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.interpolation_resolution = interpolation_resolution
         self.interpolation_keep_init = interpolation_keep_init
         self.min_measurements_per_id = min_measurements_per_id
+        self.min_time = min_time
+        self.max_time = max_time
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.extractors = extractors
@@ -118,6 +130,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.id_column = id_column
         self.time_column = time_column
         self.feature_columns = feature_columns
+        self.add_ts_meta = add_ts_meta
 
         if clustering_algorithm == "gmm":
             self.clustering_algorithm = GaussianMixture(n_components=n_clusters, random_state=random_state)
@@ -126,11 +139,40 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         else:
             raise ValueError("Invalid clustering algorithm")
 
+        self.extractors = {
+            'custom_features': 'custom' in extractors,
+            'tsfel_features': 'tsfel' in extractors,
+            'catch22_features': 'catch22' in extractors,
+            'tsfresh_features': 'tsfresh' in extractors,
+            'cesium_features': 'cesium' in extractors,
+            'antropy_features': 'antropy' in extractors,
+            'nolds_features': 'nolds' in extractors,
+            'katz_features': 'katz' in extractors,
+        }
+
     def fit(self, ts: DataFrame, y = None):
-        id_kwargs = {"id_col": self.id_column, "time_col": self.time_column, "val_col": self.feature_columns}
+        id_kwargs = {
+            "id_col": self.id_column,
+            "time_col": self.time_column,
+            "val_col": self.feature_columns
+        }
+
+        ts = preprocessing.get_filtered_df(ts, min_time=self.min_time, min_measurements=self.min_measurements_per_id, **id_kwargs.pop("val_col"))
+
+        # get meta data
+        if self.add_ts_meta:
+            # per id extract number of measurements, max_time, time_per_measurement, time_var
+            #
+            ts_meta_NoM = ts.groupby(self.id_column).size()
+            ts_meta_TpM = ts.groupby(self.id_column)[self.feature_columns]
+
 
         if self.interpolation:
-            ts = preprocessing.get_interpolated(ts, time_res=self.interpolation_resolution, keep_t0_value=self.interpolation_keep_init, df_out=True, **id_kwargs)
+            ts = preprocessing.get_interpolated(ts,
+                time_res=self.interpolation_resolution,
+                max_time=self.max_time,
+                keep_t0_value=self.interpolation_keep_init,
+                df_out=True, **id_kwargs)
 
         if self.smoothing:
             if self.smoothing_type == 'gaussian_kernel':
@@ -145,8 +187,11 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         if self.normalise_timeseries:
             ts = preprocessing.normalise_ts(ts, scaler=self.normalisation_method, df_out=True, id_kwargs**)
 
+        # extract cross sectional
+        ts_cross, durations = extractor.get_crossectional(tsdf, **extractors, **id_cols)
 
-        self.clustering_algorithm.fit(ts)
+        self.clustering_algorithm.fit(ts_cross)
+        self.durations = durations
 
     def predict(self, ts: DataFrame):
         return clustering_algorithm.predict(ts)

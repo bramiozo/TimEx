@@ -61,10 +61,10 @@ def normalise_ts(
 
 
 def get_filtered_df(
-    ts_df, id_col="ID", time_col="Time_days", min_days=365, min_measurements=3
+    ts_df, id_col="ID", time_col="Time_days", min_time=365, min_measurements=3
 ):
     maxts = ts_df.groupby(id_col)[time_col].max()
-    ltids = maxts[maxts > min_days].index
+    ltids = maxts[maxts > min_time].index
 
     cnts = (
         ts_df[(ts_df[id_col].isin(ltids)) & (ts_df[time_col] < min_days)]
@@ -83,7 +83,7 @@ def get_interpolated(
     time_col="Time_days",
     val_col="eGFR_CKDEpi2012",
     days_before=0,
-    max_days=365,
+    max_time=365,
     time_res=7,
     keep_t0_value=False,
     df_out=False,
@@ -96,12 +96,14 @@ def get_interpolated(
     :param time_col: str, time column
     :param val_col: str, default 'eGFR_CKDEpi2012'
     :param days_before: int, how many days before t0 to include
-    :param max_days: int, maximum number of days to include
+    :param max_time: int, maximum number of days to include
     :param time_res: int, time resolution of time series
     :param keep_t0_value: boolean, whether to keep t0 value
     :param df_out: boolean, whether to output dataframe
     """
-    trange = np.arange(-days_before, max_days, time_res)
+
+    # TODO: implementation version where each ID has it's own max_time
+    trange = np.arange(-days_before, max_time, time_res)
     if (keep_t0_value) & (days_before > 0):
         trange = np.insert(trange, 1, 0)
 
