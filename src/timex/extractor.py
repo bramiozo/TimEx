@@ -6,7 +6,13 @@ import scipy.stats
 
 from scipy import interpolate
 
-from scipy.stats import skew, kurtosis, entropy as _entropy, linregress, median_abs_deviation
+from scipy.stats import (
+    skew,
+    kurtosis,
+    entropy as _entropy,
+    linregress,
+    median_abs_deviation,
+)
 from scipy.fft import rfft, rfftfreq, dct
 from scipy.signal import periodogram, welch, find_peaks
 from scipy.linalg import toeplitz
@@ -16,8 +22,9 @@ from pywt import cwt
 import pymannkendall as mk
 from tqdm import tqdm
 
-import pycatch22 
-#from sktime.transformations.panel import catch22
+import pycatch22
+
+# from sktime.transformations.panel import catch22
 import tsfresh
 from tsfresh import extract_features, select_features, extract_relevant_features
 from tsfresh.utilities.dataframe_functions import impute
@@ -33,7 +40,7 @@ from cesium import featurize
 
 from tqdm import tqdm
 import sys, os
-import pandas as pd 
+import pandas as pd
 
 from numba import jit, njit
 import gc
@@ -51,11 +58,11 @@ import nolds
 
 from fastdtw import fastdtw
 
-from timex import wavelets
+from timex.shapelets import wavelets
 
-#TODO: add interpretable feature mappings 
-# e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}} 
-    
+# TODO: add interpretable feature mappings
+# e.g. {'slopes':{}, 'periodicity':{}, 'entropy':{}, 'amplitude':{}, 'trend':{}, 'nonlinearity':{}, 'spikes':{}, 'crossings':{}, 'energy':{}, 'statistics':{}, 'distribution':{}, 'autocorrelation':{}, 'stability':{}, 'linearity':{}, 'complexity':{}, 'nonlinear':{}, 'chaos':{}, 'misc':{}}
+
 ## Ideas for extracts
 # 'complexity': how many fourier components are needed to describe the signal with a certain accuracy
 # 'complexity': (1) spline complexity, how many splines are needed to describe the signal with a certain accuracy, (2) spline-series of knots etc.
@@ -66,41 +73,109 @@ from timex import wavelets
 
 
 # add Cesium features
-DEFAULT_CESIUM_FEATURES = ["amplitude", "percent_beyond_1_std", 
-                          "median_absolute_deviation", "percent_close_to_median",
-                          "weighted_average", "all_times_nhist_numpeaks", "max_slope",
-                          "all_times_nhist_peak_1_to_2", "all_times_nhist_peak_val",
-                          "avg_err", "avgt",  "stetson_k",
-                          "anderson_darling",  "shapiro_wilk"] # avg_double_to_single_step
+DEFAULT_CESIUM_FEATURES = [
+    "amplitude",
+    "percent_beyond_1_std",
+    "median_absolute_deviation",
+    "percent_close_to_median",
+    "weighted_average",
+    "all_times_nhist_numpeaks",
+    "max_slope",
+    "all_times_nhist_peak_1_to_2",
+    "all_times_nhist_peak_val",
+    "avg_err",
+    "avgt",
+    "stetson_k",
+    "anderson_darling",
+    "shapiro_wilk",
+]  # avg_double_to_single_step
 
-ANTROPY_FEATURES = ["perm_entropy", "spectral_entropy", 
-                    "svd_entropy", "app_entropy", "sample_entropy",
-                    "lziv_complexity", "num_zerocross",
-                    "hjorth_params", "petrosian_fd",  "katz_fd",
-                    "higuchi_fd", "detrended_fluctuation"
-                ]
-KATZ_FEATURES = ['linearity','het_arch', 'stl_features', 'acfpacf_features',
-                 'flat_spots', 'unitroot_kpss', 'holt_params']
+ANTROPY_FEATURES = [
+    "perm_entropy",
+    "spectral_entropy",
+    "svd_entropy",
+    "app_entropy",
+    "sample_entropy",
+    "lziv_complexity",
+    "num_zerocross",
+    "hjorth_params",
+    "petrosian_fd",
+    "katz_fd",
+    "higuchi_fd",
+    "detrended_fluctuation",
+]
+KATZ_FEATURES = [
+    "linearity",
+    "het_arch",
+    "stl_features",
+    "acfpacf_features",
+    "flat_spots",
+    "unitroot_kpss",
+    "holt_params",
+]
 
-TSFEL_FEATURES = ['positive_turning', 'negative_turning',
-                'travelled_distance', 'auc',
-                'lempel_ziv', 'median_abs_deviation',
-                'fundamental_frequency', 'spectral_roll_on',
-                'spectral_roll_off', 'spectral_positive_turning',
-                'spectral_variation', 'spectral_slope',
-                'spectral_spread', 'spectral_skewness',
-                'spectral_kurtosis', 'spectral_decrease',
-                'spectral_centroid','spectral_distance',
-                'spectral_entropy','median_frequency',
-                'max_frequency', 'max_power_spectrum',
-                'wavelet_entropy','wavelet_abs_mean',
-                'wavelet_std','wavelet_var',
-                'wavelet_energy', 'mfcc',
-                'lpcc']
+TSFEL_FEATURES = [
+    "positive_turning",
+    "negative_turning",
+    "travelled_distance",
+    "auc",
+    "lempel_ziv",
+    "median_abs_deviation",
+    "fundamental_frequency",
+    "spectral_roll_on",
+    "spectral_roll_off",
+    "spectral_positive_turning",
+    "spectral_variation",
+    "spectral_slope",
+    "spectral_spread",
+    "spectral_skewness",
+    "spectral_kurtosis",
+    "spectral_decrease",
+    "spectral_centroid",
+    "spectral_distance",
+    "spectral_entropy",
+    "median_frequency",
+    "max_frequency",
+    "max_power_spectrum",
+    "wavelet_entropy",
+    "wavelet_abs_mean",
+    "wavelet_std",
+    "wavelet_var",
+    "wavelet_energy",
+    "mfcc",
+    "lpcc",
+]
 
-WAVELET_FEATURES =['custom_wvt_'+t for t in ['mean', 'std', 'max', 'min', 'median', 'energy', 'band_energy1', 'band_energy2', 'band_energy3', 'band_energy4', 
-                        'mean_scale1', 'median_scale1', 'mean_scale2', 'median_scale2', 'mean_scale3', 'median_scale3', 'scale_max', 
-                        'entropy', 'entropy_scale1', 'entropy_scale2', 'entropy_scale3', 'sample_entropy', 'spectral_entropy', 'scale_entropy']]
+WAVELET_FEATURES = [
+    "custom_wvt_" + t
+    for t in [
+        "mean",
+        "std",
+        "max",
+        "min",
+        "median",
+        "energy",
+        "band_energy1",
+        "band_energy2",
+        "band_energy3",
+        "band_energy4",
+        "mean_scale1",
+        "median_scale1",
+        "mean_scale2",
+        "median_scale2",
+        "mean_scale3",
+        "median_scale3",
+        "scale_max",
+        "entropy",
+        "entropy_scale1",
+        "entropy_scale2",
+        "entropy_scale3",
+        "sample_entropy",
+        "spectral_entropy",
+        "scale_entropy",
+    ]
+]
+
 
 def time_function(func):
     def wrapper(*args, **kwargs):
@@ -109,140 +184,122 @@ def time_function(func):
         end_time = timer()
         elapsed_time = end_time - start_time
         return result, elapsed_time
+
     return wrapper
 
 
-def get_crossectional(tsdf: pd.DataFrame,
-                      id_col='ID',
-                      val_col='eGFR_CKDEpi2012', 
-                      time_col='Time_col',
-                      custom_features=True,
-                      tsfresh_features=False,
-                      catch22_features=False, 
-                      cesium_features=False,
-                      antropy_features=False,
-                      nolds_features=False,
-                      katz_features=False,
-                      tsfel_features=False):
+def get_crossectional(
+    tsdf: pd.DataFrame,
+    id_col="ID",
+    val_col="eGFR_CKDEpi2012",
+    time_col="Time_col",
+    custom_features=True,
+    tsfresh_features=False,
+    catch22_features=False,
+    cesium_features=False,
+    antropy_features=False,
+    nolds_features=False,
+    katz_features=False,
+    tsfel_features=False,
+):
     DURATIONS = defaultdict(dict)
 
     ResDict = {}
     if custom_features == True:
         print(f"Processing custom features..", flush=True)
         CustomExtractor = Extractor()
-        CustomExtractor.fit(tsdf,
-                            id_col=id_col,
-                            val_col=val_col,
-                            time_col=time_col)
+        CustomExtractor.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_custom = CustomExtractor.transform()
-        DURATIONS['CustomExtractor'] = CustomExtractor.duration_dict
-        ResDict['custom'] = ts_data_agg_custom.set_index('id')
+        DURATIONS["CustomExtractor"] = CustomExtractor.duration_dict
+        ResDict["custom"] = ts_data_agg_custom.set_index("id")
 
-    if tsfresh_features ==True:
+    if tsfresh_features == True:
         print(f"Processing Fresh features..", flush=True)
         FreshExtractor = TsFreshExtractor()
-        FreshExtractor.fit(tsdf, 
-                            id_col=id_col, 
-                            val_col=val_col,
-                            time_col=time_col)
+        FreshExtractor.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_fresh = FreshExtractor.transform()
-        DURATIONS['FreshExtractor'] = FreshExtractor.duration_dict
-        ResDict['tsfresh'] = ts_data_agg_fresh
+        DURATIONS["FreshExtractor"] = FreshExtractor.duration_dict
+        ResDict["tsfresh"] = ts_data_agg_fresh
 
-    if catch22_features==True:
+    if catch22_features == True:
         print(f"Processing catch22 features..", flush=True)
-        Catch22Extract  = Catch22Extractor()
-        Catch22Extract.fit(tsdf, 
-                    id_col=id_col, 
-                    val_col=val_col,
-                    time_col=time_col)
+        Catch22Extract = Catch22Extractor()
+        Catch22Extract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_catch22 = Catch22Extract.transform()
-        DURATIONS['Catch22Extractor'] = Catch22Extract.duration_dict
-        ResDict['catch22'] = ts_data_agg_catch22
+        DURATIONS["Catch22Extractor"] = Catch22Extract.duration_dict
+        ResDict["catch22"] = ts_data_agg_catch22
 
-    if cesium_features==True:
+    if cesium_features == True:
         print(f"Processing cesium features..", flush=True)
         CesiumExtract = CesiumExtractor()
-        CesiumExtract.fit(tsdf, 
-                            id_col=id_col, 
-                            val_col=val_col,
-                            time_col=time_col)
+        CesiumExtract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_cesium = CesiumExtract.transform()
-        DURATIONS['CesiumExtract'] = CesiumExtract.duration_dict
-        ResDict['cesium'] = ts_data_agg_cesium
-    
-    if antropy_features==True:
+        DURATIONS["CesiumExtract"] = CesiumExtract.duration_dict
+        ResDict["cesium"] = ts_data_agg_cesium
+
+    if antropy_features == True:
         print(f"Processing Antropy features..", flush=True)
         AntropyExtract = AntropyExtractor()
-        AntropyExtract.fit(tsdf, 
-                            id_col=id_col, 
-                            val_col=val_col,
-                            time_col=time_col)
+        AntropyExtract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_antropy = AntropyExtract.transform()
-        DURATIONS['AntropyExtract'] = AntropyExtract.duration_dict
-        ResDict['antropy'] = ts_data_agg_antropy
-    
-    if nolds_features==True:
+        DURATIONS["AntropyExtract"] = AntropyExtract.duration_dict
+        ResDict["antropy"] = ts_data_agg_antropy
+
+    if nolds_features == True:
         print(f"Processing Nolds features..", flush=True)
         NoldsExtract = NoldsExtractor()
-        NoldsExtract.fit(tsdf, 
-                            id_col=id_col, 
-                            val_col=val_col,
-                            time_col=time_col)
+        NoldsExtract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_nolds = NoldsExtract.transform()
-        DURATIONS['NoldsExtract'] = NoldsExtract.duration_dict
-        ResDict['nolds'] = ts_data_agg_nolds
+        DURATIONS["NoldsExtract"] = NoldsExtract.duration_dict
+        ResDict["nolds"] = ts_data_agg_nolds
 
-    if katz_features==True:
+    if katz_features == True:
         print(f"Processing Katz features..", flush=True)
         KatzExtract = KatzExtractor()
-        KatzExtract.fit(tsdf,
-                            id_col=id_col,
-                            val_col=val_col,
-                            time_col=time_col)
+        KatzExtract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_katz = KatzExtract.transform()
-        DURATIONS['KatzExtract'] = KatzExtract.duration_dict
-        ResDict['katz'] = ts_data_agg_katz
+        DURATIONS["KatzExtract"] = KatzExtract.duration_dict
+        ResDict["katz"] = ts_data_agg_katz
 
-    if tsfel_features==True:
+    if tsfel_features == True:
         print(f"Processing tsfel features..", flush=True)
         TSfelExtract = TSFelExtractor()
-        TSfelExtract.fit(tsdf,
-                            id_col=id_col,
-                            val_col=val_col,
-                            time_col=time_col)
+        TSfelExtract.fit(tsdf, id_col=id_col, val_col=val_col, time_col=time_col)
         ts_data_agg_tsfel = TSfelExtract.transform()
-        DURATIONS['TSfelExtract'] = TSfelExtract.duration_dict
-        ResDict['tsfel'] = ts_data_agg_tsfel
+        DURATIONS["TSfelExtract"] = TSfelExtract.duration_dict
+        ResDict["tsfel"] = ts_data_agg_tsfel
 
     # merge
     iterator = iter(ResDict.items())
     k, final = next(iterator)
-    final.columns = [f'{c}_0' for c in final.columns]
+    final.columns = [f"{c}_0" for c in final.columns]
     if len(final.columns) != len(set(final.columns)):
         raise ValueError(f"Duplicate columns in {final.columns}")
-    
+
     for k, df in iterator:
         if len(final.columns) != len(set(final.columns)):
-            raise ValueError(f"Duplicate columns in {final.columns}")    
-        final = final.join(df, how='inner', rsuffix='_'+k)
+            raise ValueError(f"Duplicate columns in {final.columns}")
+        final = final.join(df, how="inner", rsuffix="_" + k)
 
     return final, DURATIONS
+
 
 class Extractor:
     def __init__(self):
         self.features = {}
         self.duration_dict = defaultdict(float)
-    
-    def fit(self, df, id_col='id', val_col='value', time_col='dt', shape_comparison=False):
-        #TODO: streamline kwargs for internal functions...
+
+    def fit(
+        self, df, id_col="id", val_col="value", time_col="dt", shape_comparison=False
+    ):
+        # TODO: streamline kwargs for internal functions...
         df = df.sort_values(by=[id_col, time_col])
         num_series = df[id_col].nunique()
         # Iterate over all unique IDs in the DataFrame
         for _id in tqdm(df[id_col].unique()):
             # Extract the time series data for the current ID
             ts_data = df[df[id_col] == _id][val_col].values
-            
+
             # Calculate features
 
             mean_, time_mean = time_function(np.mean)(ts_data)
@@ -252,20 +309,38 @@ class Extractor:
             skewness, time_skewness = time_function(skew)(ts_data)
             kurtosis_value, time_kurtosis = time_function(kurtosis)(ts_data)
 
-            entropy_per_rel, time_entropy_per_rel = time_function(get_spectral_entropy)(ts_data, freq=1)
+            entropy_per_rel, time_entropy_per_rel = time_function(get_spectral_entropy)(
+                ts_data, freq=1
+            )
             entropy_rel, time_entropy_rel = time_function(get_relative_entropy)(ts_data)
-            lumpiness, time_lumpiness = time_function(get_lumpiness)(ts_data, window_size=8)
-            lump_stability, time_lump_stability = time_function(get_stability)(ts_data, window_size=8)
-            hurst_exponent, time_hurst_exponent = time_function(get_hurst)(ts_data, lag_size=8)
-            rel_slope_sign_switch_sum, time_rel_ssss = time_function(get_slope_sign_switch_sum)(ts_data)
+            lumpiness, time_lumpiness = time_function(get_lumpiness)(
+                ts_data, window_size=8
+            )
+            lump_stability, time_lump_stability = time_function(get_stability)(
+                ts_data, window_size=8
+            )
+            hurst_exponent, time_hurst_exponent = time_function(get_hurst)(
+                ts_data, lag_size=8
+            )
+            rel_slope_sign_switch_sum, time_rel_ssss = time_function(
+                get_slope_sign_switch_sum
+            )(ts_data)
 
-            (mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend), time_mankendall = \
-                        time_function(_mann_kendall_test)(ts_data)
+            (
+                (mk_s, mk_z, mk_Tau, mk_ss, mk_var_s, mk_slope, mk_intercept, mk_trend),
+                time_mankendall,
+            ) = time_function(_mann_kendall_test)(ts_data)
 
-            wavelet_transform_feature_np, time_wavelet_transform = time_function(extract_cwt_features)(ts_data)
-            wavelet_transform_feature = dict(zip(WAVELET_FEATURES,wavelet_transform_feature_np))
+            wavelet_transform_feature_np, time_wavelet_transform = time_function(
+                extract_cwt_features
+            )(ts_data)
+            wavelet_transform_feature = dict(
+                zip(WAVELET_FEATURES, wavelet_transform_feature_np)
+            )
 
-            psd_int, time_psdint = time_function(_psd_int)(ts_data, integrator='trapezoidal')
+            psd_int, time_psdint = time_function(_psd_int)(
+                ts_data, integrator="trapezoidal"
+            )
 
             avg_3rd_diff, time_avg3rdDiff = time_function(avg_3rd_order)(ts_data)
             avg_2nd_diff, time_avg2ndDiff = time_function(avg_2nd_order)(ts_data)
@@ -274,102 +349,109 @@ class Extractor:
             entr_2nd_diff, time_entr2ndDiff = time_function(diff_entropy_2nd)(ts_data)
             entr_3rd_diff, time_entr3rdDiff = time_function(diff_entropy_3rd)(ts_data)
 
-
             _peak_over_mean, time_peak_o_mean = time_function(peak_over_mean)(ts_data)
-            _peak_over_median, time_peak_o_median = time_function(peak_over_median)(ts_data)
-            _first_gradient, time_first_gradient = time_function(first_gradient)(ts_data)
-            _second_gradient, time_second_gradient = time_function(second_gradient)(ts_data)
+            _peak_over_median, time_peak_o_median = time_function(peak_over_median)(
+                ts_data
+            )
+            _first_gradient, time_first_gradient = time_function(first_gradient)(
+                ts_data
+            )
+            _second_gradient, time_second_gradient = time_function(second_gradient)(
+                ts_data
+            )
             _last_gradient, time_last_gradient = time_function(last_gradient)(ts_data)
 
             if shape_comparison:
                 shape_comparisons, time_shape = time_function(shape_compare)(ts_data)
-                self.duration_dict['time_shape'] += time_shape
+                self.duration_dict["time_shape"] += time_shape
 
             cumuvalues, time_cumuvalues = time_function(cumuvals)(ts_data)
 
-            fourcoeffsPolar, time_fourcoeffs = time_function(extract_fft_features)(ts_data,
-                                                                              num_features=10,
-                                                                              max_frequency=50
-                                                                              )
-            fourcoeffsCart, time_fourcoeffs_cart = time_function(FourierCoefficients)(ts_data,
-                                                                                      number_of_components=25)
+            fourcoeffsPolar, time_fourcoeffs = time_function(extract_fft_features)(
+                ts_data, num_features=10, max_frequency=50
+            )
+            fourcoeffsCart, time_fourcoeffs_cart = time_function(FourierCoefficients)(
+                ts_data, number_of_components=25
+            )
 
-            wavelet_coeffs, time_wavelet_coeffs = time_function(wavelets.extract_wavelet_features)(ts_data,
-                                                                                                   level=3,
-                                                                                                   num_features=5)
+            wavelet_coeffs, time_wavelet_coeffs = time_function(
+                wavelets.extract_wavelet_features
+            )(ts_data, level=3, num_features=5)
 
-            peak_and_valleys, time_peak_and_val = time_function(extract_peaks_and_valleys)(ts_data, N=5)
+            peak_and_valleys, time_peak_and_val = time_function(
+                extract_peaks_and_valleys
+            )(ts_data, N=5)
 
-            _spline_params, time_splines = time_function(spline_params)(ts_data, weighted=True, max_params=10)
+            _spline_params, time_splines = time_function(spline_params)(
+                ts_data, weighted=True, max_params=10
+            )
 
-
-
-            self.duration_dict['time_mean'] += time_mean
-            self.duration_dict['time_min'] += time_min
-            self.duration_dict['time_max'] += time_max
-            self.duration_dict['time_var'] += time_var
-            self.duration_dict['time_skewness'] += time_skewness
-            self.duration_dict['time_kurtosis'] += time_kurtosis
-            self.duration_dict['time_entropy_per_rel'] += time_entropy_per_rel
-            self.duration_dict['time_entropy_rel'] += time_entropy_rel
-            self.duration_dict['time_lumpiness'] += time_lumpiness
-            self.duration_dict['time_lump_stability'] += time_lump_stability
-            self.duration_dict['time_hurst_exponent'] += time_hurst_exponent
-            self.duration_dict['time_rel_ssss'] += time_rel_ssss
-            self.duration_dict['time_mankendall'] += time_mankendall
-            self.duration_dict['time_wavelet_transform'] += time_wavelet_transform
-            self.duration_dict['time_psdint'] += time_psdint
-            self.duration_dict['time_avg3rdDiff'] += time_avg3rdDiff
-            self.duration_dict['time_avg2ndDiff'] += time_avg2ndDiff
-            self.duration_dict['time_avg1stDiff'] += time_avg1stDiff
-            self.duration_dict['time_entr1stDiff'] += time_entr1stDiff
-            self.duration_dict['time_entr2ndDiff'] += time_entr2ndDiff
-            self.duration_dict['time_entr3rdDiff'] += time_entr3rdDiff
-            self.duration_dict['time_peak_o_mean'] += time_peak_o_mean
-            self.duration_dict['time_peak_o_median'] += time_peak_o_median
-            self.duration_dict['time_first_gradient'] += time_first_gradient
-            self.duration_dict['time_second_gradient'] += time_second_gradient
-            self.duration_dict['time_last_gradient'] += time_last_gradient
-            self.duration_dict['time_cumuvalues'] += time_cumuvalues
-            self.duration_dict['time_fourcoeffs'] += time_fourcoeffs
-            self.duration_dict['time_wavelet_coeffs'] += time_wavelet_coeffs
-            self.duration_dict['time_peak_and_val'] += time_peak_and_val
-            self.duration_dict['time_spline'] += time_splines
+            self.duration_dict["time_mean"] += time_mean
+            self.duration_dict["time_min"] += time_min
+            self.duration_dict["time_max"] += time_max
+            self.duration_dict["time_var"] += time_var
+            self.duration_dict["time_skewness"] += time_skewness
+            self.duration_dict["time_kurtosis"] += time_kurtosis
+            self.duration_dict["time_entropy_per_rel"] += time_entropy_per_rel
+            self.duration_dict["time_entropy_rel"] += time_entropy_rel
+            self.duration_dict["time_lumpiness"] += time_lumpiness
+            self.duration_dict["time_lump_stability"] += time_lump_stability
+            self.duration_dict["time_hurst_exponent"] += time_hurst_exponent
+            self.duration_dict["time_rel_ssss"] += time_rel_ssss
+            self.duration_dict["time_mankendall"] += time_mankendall
+            self.duration_dict["time_wavelet_transform"] += time_wavelet_transform
+            self.duration_dict["time_psdint"] += time_psdint
+            self.duration_dict["time_avg3rdDiff"] += time_avg3rdDiff
+            self.duration_dict["time_avg2ndDiff"] += time_avg2ndDiff
+            self.duration_dict["time_avg1stDiff"] += time_avg1stDiff
+            self.duration_dict["time_entr1stDiff"] += time_entr1stDiff
+            self.duration_dict["time_entr2ndDiff"] += time_entr2ndDiff
+            self.duration_dict["time_entr3rdDiff"] += time_entr3rdDiff
+            self.duration_dict["time_peak_o_mean"] += time_peak_o_mean
+            self.duration_dict["time_peak_o_median"] += time_peak_o_median
+            self.duration_dict["time_first_gradient"] += time_first_gradient
+            self.duration_dict["time_second_gradient"] += time_second_gradient
+            self.duration_dict["time_last_gradient"] += time_last_gradient
+            self.duration_dict["time_cumuvalues"] += time_cumuvalues
+            self.duration_dict["time_fourcoeffs"] += time_fourcoeffs
+            self.duration_dict["time_wavelet_coeffs"] += time_wavelet_coeffs
+            self.duration_dict["time_peak_and_val"] += time_peak_and_val
+            self.duration_dict["time_spline"] += time_splines
 
             # Store the features for the current ID
             res_dict = {
-                'mean': mean_,
-                'min': min_,
-                'max': max_,
-                'variance': variance,
-                'skewness': skewness,
-                'kurtosis': kurtosis_value,
-                'entropy_per_rel': entropy_per_rel,
-                'entropy_rel': entropy_rel,
-                'lumpiness': lumpiness,
-                'lump_stability': lump_stability,
-                'hurst_exponent': hurst_exponent,
-                'mann_kendall_s': mk_s,
-                'mann_kendall_z': mk_z,
-                'mann_kendall_Tau': mk_Tau,
-                'mann_kendall_ss': mk_ss,
-                'mann_kendall_var_s': mk_var_s,
-                'mann_kendall_slope': mk_slope,
-                'mann_kendall_intercept': mk_intercept,
-                'mann_kendall_trend': mk_trend,
-                'psd_int': psd_int,
-                'rel_slope_sign_switch_sum': rel_slope_sign_switch_sum,
-                'avg_3rd_diff': avg_3rd_diff,
-                'avg_2nd_diff': avg_2nd_diff,
-                'avg_1st_diff': avg_1st_diff,
-                'entr_1st_diff': entr_1st_diff,
-                'entr_2nd_diff': entr_2nd_diff,
-                'entr_3rd_diff': entr_3rd_diff,
-                'peak_over_mean': _peak_over_mean,
-                'peak_over_median': _peak_over_median,
-                'first_gradient': _first_gradient,
-                'second_gradient': _second_gradient,
-                'last_gradient': _last_gradient,
+                "mean": mean_,
+                "min": min_,
+                "max": max_,
+                "variance": variance,
+                "skewness": skewness,
+                "kurtosis": kurtosis_value,
+                "entropy_per_rel": entropy_per_rel,
+                "entropy_rel": entropy_rel,
+                "lumpiness": lumpiness,
+                "lump_stability": lump_stability,
+                "hurst_exponent": hurst_exponent,
+                "mann_kendall_s": mk_s,
+                "mann_kendall_z": mk_z,
+                "mann_kendall_Tau": mk_Tau,
+                "mann_kendall_ss": mk_ss,
+                "mann_kendall_var_s": mk_var_s,
+                "mann_kendall_slope": mk_slope,
+                "mann_kendall_intercept": mk_intercept,
+                "mann_kendall_trend": mk_trend,
+                "psd_int": psd_int,
+                "rel_slope_sign_switch_sum": rel_slope_sign_switch_sum,
+                "avg_3rd_diff": avg_3rd_diff,
+                "avg_2nd_diff": avg_2nd_diff,
+                "avg_1st_diff": avg_1st_diff,
+                "entr_1st_diff": entr_1st_diff,
+                "entr_2nd_diff": entr_2nd_diff,
+                "entr_3rd_diff": entr_3rd_diff,
+                "peak_over_mean": _peak_over_mean,
+                "peak_over_median": _peak_over_median,
+                "first_gradient": _first_gradient,
+                "second_gradient": _second_gradient,
+                "last_gradient": _last_gradient,
             }
             if shape_comparison:
                 res_dict.update(shape_comparisons)
@@ -381,15 +463,16 @@ class Extractor:
             res_dict.update(wavelet_transform_feature)
             res_dict.update(_spline_params)
 
-
             self.features[_id] = res_dict
-        self.duration_dict = {k:v/num_series for k,v in self.duration_dict.items()}
+        self.duration_dict = {k: v / num_series for k, v in self.duration_dict.items()}
+
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, orient='index').reset_index()
-        features_df.rename(columns={'index': 'id'}, inplace=True)
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df.rename(columns={"index": "id"}, inplace=True)
         return features_df
-    
 
 
 class TsFreshExtractor:
@@ -397,69 +480,92 @@ class TsFreshExtractor:
         self.features = {}
         self.duration_dict = defaultdict(float)
 
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
         # Extract features
         df = df.sort_values(by=[id_col, time_col])
-        extracted_features, time_tsfresh = \
-                time_function(extract_features)(df,
-                                 column_id=id_col, 
-                                 column_sort=time_col,
-                                 impute_function=impute,
-                                 default_fc_parameters=ComprehensiveFCParameters())
+        extracted_features, time_tsfresh = time_function(extract_features)(
+            df,
+            column_id=id_col,
+            column_sort=time_col,
+            impute_function=impute,
+            default_fc_parameters=ComprehensiveFCParameters(),
+        )
         self.features = extracted_features
-        self.duration_dict['total'] = time_tsfresh
-    
+        self.duration_dict["total"] = time_tsfresh
+
     def transform(self):
         return self.features
 
-#from pycatch22 import catch22_all
+
+# from pycatch22 import catch22_all
 class Catch22Extractor:
     def __init__(self):
         self.features = {}
         self.duration_dict = defaultdict(float)
 
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
         # Extract features
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
         for _id in tqdm(df[id_col].unique()):
             ts_data = df[df[id_col] == _id][val_col].values
-            extracted_features, time_total = time_function(pycatch22.catch22_all)(ts_data)
-            _features[_id] = dict(zip(extracted_features['names'], extracted_features['values']))
-            self.duration_dict['total'] += time_total
+            extracted_features, time_total = time_function(pycatch22.catch22_all)(
+                ts_data
+            )
+            _features[_id] = dict(
+                zip(extracted_features["names"], extracted_features["values"])
+            )
+            self.duration_dict["total"] += time_total
         self.features = _features
-        self.duration_dict['total'] /= df.shape[0]
-    
+        self.duration_dict["total"] /= df.shape[0]
+
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, 
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
-    
+
 
 class CesiumExtractor:
-    def __init__(self, 
-                 features_to_use=None, 
-                 extract_periodic_features=True,
-                 extract_cad_features=False):
+    def __init__(
+        self,
+        features_to_use=None,
+        extract_periodic_features=True,
+        extract_cad_features=False,
+    ):
         self.features = {}
-        self.features_to_use = features_to_use if features_to_use \
-                                    else DEFAULT_CESIUM_FEATURES
+        self.features_to_use = (
+            features_to_use if features_to_use else DEFAULT_CESIUM_FEATURES
+        )
         self.duration_dict = defaultdict(float)
 
-        if extract_periodic_features==True:
-            self.features_to_use += ["period_fast", "freq1_freq", "freq2_freq", 
-                                     "freq3_freq", "linear_trend","freq1_rel_phase2", 
-                                     "freq2_rel_phase2", "freq3_rel_phase2"]
-            
-        if extract_cad_features==True:
-            self.features_to_use += ["cad_probs_10", "cad_probs_30", "cad_probs_100", 
-                                     "cad_probs_500", "cads_avg"]
+        if extract_periodic_features == True:
+            self.features_to_use += [
+                "period_fast",
+                "freq1_freq",
+                "freq2_freq",
+                "freq3_freq",
+                "linear_trend",
+                "freq1_rel_phase2",
+                "freq2_rel_phase2",
+                "freq3_rel_phase2",
+            ]
+
+        if extract_cad_features == True:
+            self.features_to_use += [
+                "cad_probs_10",
+                "cad_probs_30",
+                "cad_probs_100",
+                "cad_probs_500",
+                "cads_avg",
+            ]
 
         self.features_to_use = list(set(self.features_to_use))
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
+
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
 
@@ -467,145 +573,153 @@ class CesiumExtractor:
             times = df[df[id_col] == _id][time_col].values
             vals = df[df[id_col] == _id][val_col].values
             feats, time_total = time_function(featurize.featurize_time_series)(
-                                            times=times,
-                                            values=vals,
-                                            errors=None,
-                                            features_to_use=self.features_to_use,
-                                            )
+                times=times,
+                values=vals,
+                errors=None,
+                features_to_use=self.features_to_use,
+            )
             feats.columns = feats.columns.droplevel(-1)
             if len(feats.columns) != len(set(feats.columns)):
-                raise  ValueError(f"The are duplicate columns in {feats.columns}")
+                raise ValueError(f"The are duplicate columns in {feats.columns}")
             feats_dict = feats.to_dict()
-            _features[_id] = {k:v[0] for k,v in feats_dict.items()}
-            self.duration_dict['total'] += time_total
+            _features[_id] = {k: v[0] for k, v in feats_dict.items()}
+            self.duration_dict["total"] += time_total
         self.features = _features
-        self.duration_dict['total'] /= df.shape[0]
+        self.duration_dict["total"] /= df.shape[0]
 
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, 
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
-    
-    
+
+
 class AntropyExtractor:
-    def __init__(self,  
-                 features_to_use: list=None):
-        self.features_to_use = features_to_use if features_to_use \
-                                            else ANTROPY_FEATURES
+    def __init__(self, features_to_use: list = None):
+        self.features_to_use = features_to_use if features_to_use else ANTROPY_FEATURES
         self.duration_dict = defaultdict(float)
 
     def tsfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
-            'perm_entropy': ant.perm_entropy,
-            'spectral_entropy': ant.spectral_entropy,
-            'svd_entropy': ant.svd_entropy,
-            'app_entropy': ant.app_entropy,
-            'sample_entropy': ant.sample_entropy,
-            'lziv_complexity': ant.lziv_complexity,
-            'num_zerocross': ant.num_zerocross,
-            'hjorth_params': ant.hjorth_params,
-            'petrosian_fd': ant.petrosian_fd,
-            'katz_fd': ant.katz_fd,
-            'higuchi_fd': ant.higuchi_fd,
-            'detrended_fluctuation': ant.detrended_fluctuation
+            "perm_entropy": ant.perm_entropy,
+            "spectral_entropy": ant.spectral_entropy,
+            "svd_entropy": ant.svd_entropy,
+            "app_entropy": ant.app_entropy,
+            "sample_entropy": ant.sample_entropy,
+            "lziv_complexity": ant.lziv_complexity,
+            "num_zerocross": ant.num_zerocross,
+            "hjorth_params": ant.hjorth_params,
+            "petrosian_fd": ant.petrosian_fd,
+            "katz_fd": ant.katz_fd,
+            "higuchi_fd": ant.higuchi_fd,
+            "detrended_fluctuation": ant.detrended_fluctuation,
         }
 
         res = {}
         for f in features_to_use:
             if f in feature_functions:
                 fun = feature_functions[f]
-                if f == 'hjorth_params':
+                if f == "hjorth_params":
                     hjorth, time_elapsed = time_function(fun)(ts_data)
-                    res['mobility'] = hjorth[0]
-                    res['complexity'] = hjorth[1]
-                elif f == 'svd_entropy':
+                    res["mobility"] = hjorth[0]
+                    res["complexity"] = hjorth[1]
+                elif f == "svd_entropy":
                     try:
                         result, time_elapsed = time_function(fun)(ts_data)
-                        res['svd_entropy'] = result
+                        res["svd_entropy"] = result
                     except:
-                        res['svd_entropy'] = np.nan
+                        res["svd_entropy"] = np.nan
                         time_elapsed = 0
-                elif f == 'spectral_entropy':
+                elif f == "spectral_entropy":
                     result, time_elapsed = time_function(fun)(ts_data, sf=1)
-                    res['spectral_entropy'] = result
+                    res["spectral_entropy"] = result
                 else:
                     result, time_elapsed = time_function(fun)(ts_data)
                     res[f] = result
                 self.duration_dict[f] += time_elapsed
         return res
-     
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
-        assert(self.features_to_use is not None), "Please provide a list of features to use"
+
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
+        assert self.features_to_use is not None, (
+            "Please provide a list of features to use"
+        )
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
         for _id in tqdm(df[id_col].unique()):
             ts_data = df[df[id_col] == _id][val_col].values
             feats = self.tsfeatures(ts_data, features_to_use=self.features_to_use)
             _features[_id] = feats
-        self.duration_dict = {k: v/df.shape[0] for k,v in self.duration_dict.items()}
+        self.duration_dict = {k: v / df.shape[0] for k, v in self.duration_dict.items()}
         self.features = _features
 
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, 
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
 
 
 class NoldsExtractor:
-    def __init__(self, 
-                 features_to_use: list=None,
-                 emb_dims=[1,2,3,4],
-                 min_ts_len=100):
+    def __init__(
+        self, features_to_use: list = None, emb_dims=[1, 2, 3, 4], min_ts_len=100
+    ):
         self.emb_dims = [1, 2, 3, 4] if emb_dims is None else emb_dims
-        self.features_to_use = features_to_use if features_to_use \
-                                else ['lyap_e', 'corr_dim']
+        self.features_to_use = (
+            features_to_use if features_to_use else ["lyap_e", "corr_dim"]
+        )
         self.min_ts_len = min_ts_len
         self.duration_dict = defaultdict(float)
-    
-    def tsfeatures(self,ts_data, features_to_use: list=None, min_len=50):
+
+    def tsfeatures(self, ts_data, features_to_use: list = None, min_len=50):
         res = {}
         for f in features_to_use:
-            if f == 'lyap_e':
+            if f == "lyap_e":
                 if ts_data.shape[0] < min_len:
-                    v_ = np.tile(ts_data, min_len//ts_data.shape[0] + 1)
+                    v_ = np.tile(ts_data, min_len // ts_data.shape[0] + 1)
                 else:
-                    v_ = ts_data       
+                    v_ = ts_data
                 _res, time_lyap = time_function(nolds.lyap_e)(v_)
                 for nd, res_ in enumerate(_res):
-                    res[f'lyap_e_{nd}'] = res_
-                self.duration_dict['lyap'] += time_lyap
-            elif f == 'corr_dim':
+                    res[f"lyap_e_{nd}"] = res_
+                self.duration_dict["lyap"] += time_lyap
+            elif f == "corr_dim":
                 for edim in self.emb_dims:
-                    res[f'corr_dim_{edim}'], time_corr = time_function(nolds.corr_dim)(ts_data, emb_dim=edim)
-                    self.duration_dict[f'corr_dim_{edim}'] += time_corr
+                    res[f"corr_dim_{edim}"], time_corr = time_function(nolds.corr_dim)(
+                        ts_data, emb_dim=edim
+                    )
+                    self.duration_dict[f"corr_dim_{edim}"] += time_corr
         return res
-    
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
-        assert(self.features_to_use is not None), "Please provide a list of features to use"
+
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
+        assert self.features_to_use is not None, (
+            "Please provide a list of features to use"
+        )
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
         for _id in tqdm(df[id_col].unique()):
             ts_data = df[df[id_col] == _id][val_col].values
-            feats = self.tsfeatures(ts_data, 
-                                    features_to_use=self.features_to_use,
-                                    min_len=self.min_ts_len)
+            feats = self.tsfeatures(
+                ts_data, features_to_use=self.features_to_use, min_len=self.min_ts_len
+            )
             _features[_id] = feats
-        self.duration_dict = {k:v/df.shape[0] for k,v in self.duration_dict.items()}
+        self.duration_dict = {k: v / df.shape[0] for k, v in self.duration_dict.items()}
         self.features = _features
 
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features, 
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
+
 
 # TODO: Implement the KatzExtractor class
 class KatzExtractor:
@@ -618,29 +732,34 @@ class KatzExtractor:
     # TsFeatures.get_cusum_detector
     # TsFeatures.get_trend_detector
 
-    def __init__(self,
-                 features_to_use: list = None):
-        self.features_to_use = features_to_use if features_to_use \
-            else KATZ_FEATURES
+    def __init__(self, features_to_use: list = None):
+        self.features_to_use = features_to_use if features_to_use else KATZ_FEATURES
         self.duration_dict = defaultdict(float)
 
     def katzfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
-            'linearity': get_linearity,
-            'het_arch': get_het_arch,
-            'stl_features': get_stl_features,
-            'acfpacf_features': get_acfpacf_features,
-            'flat_spots': get_flat_spots,
+            "linearity": get_linearity,
+            "het_arch": get_het_arch,
+            "stl_features": get_stl_features,
+            "acfpacf_features": get_acfpacf_features,
+            "flat_spots": get_flat_spots,
             #'unitroot_kpss': get_unitroot_kpss,
-            'holt_params': get_holt_params,
+            "holt_params": get_holt_params,
         }
 
         res = {}
         name_dict = {
-            'acfpacf_features': ['pacf5', 'diff1y_pacf5', 'diff2y_pacf5', 'seas_pacf1'],
-            'stl_features': ["var_trend", "var_res", "trend_strength", "seasonality_strength",
-                              "spikiness", "peak", "trough"],
-            'holt_params': ["holt_alpha", "holt_beta"]
+            "acfpacf_features": ["pacf5", "diff1y_pacf5", "diff2y_pacf5", "seas_pacf1"],
+            "stl_features": [
+                "var_trend",
+                "var_res",
+                "trend_strength",
+                "seasonality_strength",
+                "spikiness",
+                "peak",
+                "trough",
+            ],
+            "holt_params": ["holt_alpha", "holt_beta"],
         }
         for f in features_to_use:
             if f in feature_functions:
@@ -649,85 +768,85 @@ class KatzExtractor:
                     result, time_elapsed = time_function(fun)(ts_data)
                 except Exception as e:
                     # TODO: this is problematic because we don't carry the keys of results that are dictionaries
-                    if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+                    if f in ["stl_features", "acfpacf_features", "holt_params"]:
                         result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
                     else:
                         result, time_elapsed = np.nan, np.nan
 
-
-                if f in ['stl_features', 'acfpacf_features', 'holt_params']:
+                if f in ["stl_features", "acfpacf_features", "holt_params"]:
                     res.update(result)
                 else:
                     res[f] = result
                 self.duration_dict[f] += time_elapsed
         return res
 
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
-        assert (self.features_to_use is not None), "Please provide a list of features to use"
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
+        assert self.features_to_use is not None, (
+            "Please provide a list of features to use"
+        )
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
         for _id in tqdm(df[id_col].unique()):
             ts_data = df[df[id_col] == _id][val_col].values
             feats = self.katzfeatures(ts_data, features_to_use=self.features_to_use)
             _features[_id] = feats
-        self.duration_dict = {k: v/df.shape[0] for k, v in self.duration_dict.items()}
+        self.duration_dict = {k: v / df.shape[0] for k, v in self.duration_dict.items()}
         self.features = _features
 
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features,
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
 
+
 class TSFelExtractor:
-    def __init__(self,
-                 features_to_use: list = None):
-        self.features_to_use = features_to_use if features_to_use \
-            else TSFEL_FEATURES
+    def __init__(self, features_to_use: list = None):
+        self.features_to_use = features_to_use if features_to_use else TSFEL_FEATURES
         self.features = None
         self.duration_dict = defaultdict(float)
 
-        
     def tsfelfeatures(self, ts_data, features_to_use: list = None):
         feature_functions = {
-            'positive_turning': positive_turning,
-            'negative_turning': negative_turning,
-            'travelled_distance': travelled_distance,
-            'auc': auc,
-            'lempel_ziv': lempel_ziv,
-            'median_abs_deviation': median_abs_deviation,
-            'fundamental_frequency': fundamental_frequency,
-            'spectral_roll_on': spectral_roll_on,
-            'spectral_roll_off': spectral_roll_off,
-            'spectral_positive_turning': spectral_positive_turning,
-            'spectral_variation': spectral_variation,
-            'spectral_slope': spectral_slope,
-            'spectral_spread': spectral_spread,
-            'spectral_skewness': spectral_skewness,
-            'spectral_kurtosis': spectral_kurtosis,
-            'spectral_decrease': spectral_decrease,
-            'spectral_centroid': spectral_centroid,
-            'spectral_distance': spectral_distance,
-            'spectral_entropy': spectral_entropy,
-            'median_frequency': median_frequency,
-            'max_frequency': max_frequency,
-            'max_power_spectrum': max_power_spectrum,
-            'wavelet_entropy': wavelets.wavelet_entropy,
-            'wavelet_abs_mean': wavelets.wavelet_abs_mean,
-            'wavelet_std': wavelets.wavelet_std,
-            'wavelet_energy': wavelets.wavelet_energy,
-            'mfcc': mfcc,
-            'lpcc': lpcc
+            "positive_turning": positive_turning,
+            "negative_turning": negative_turning,
+            "travelled_distance": travelled_distance,
+            "auc": auc,
+            "lempel_ziv": lempel_ziv,
+            "median_abs_deviation": median_abs_deviation,
+            "fundamental_frequency": fundamental_frequency,
+            "spectral_roll_on": spectral_roll_on,
+            "spectral_roll_off": spectral_roll_off,
+            "spectral_positive_turning": spectral_positive_turning,
+            "spectral_variation": spectral_variation,
+            "spectral_slope": spectral_slope,
+            "spectral_spread": spectral_spread,
+            "spectral_skewness": spectral_skewness,
+            "spectral_kurtosis": spectral_kurtosis,
+            "spectral_decrease": spectral_decrease,
+            "spectral_centroid": spectral_centroid,
+            "spectral_distance": spectral_distance,
+            "spectral_entropy": spectral_entropy,
+            "median_frequency": median_frequency,
+            "max_frequency": max_frequency,
+            "max_power_spectrum": max_power_spectrum,
+            "wavelet_entropy": wavelets.wavelet_entropy,
+            "wavelet_abs_mean": wavelets.wavelet_abs_mean,
+            "wavelet_std": wavelets.wavelet_std,
+            "wavelet_energy": wavelets.wavelet_energy,
+            "mfcc": mfcc,
+            "lpcc": lpcc,
         }
         res = {}
         name_dict = {
-            'wavelet_abs_mean': [f'WVL_amean_{i}' for i in range(10)],
-            'wavelet_std': [f'WVL_std_{i}' for i in range(10)],
-            'wavelet_energy': [f'WVL_energy_{i}' for i in range(10)],
-            'mfcc': [f'MFCC_{i}' for i in range(13)],
-            'lpcc': [f'LPCC_{i}' for i in range(12)]
+            "wavelet_abs_mean": [f"WVL_amean_{i}" for i in range(10)],
+            "wavelet_std": [f"WVL_std_{i}" for i in range(10)],
+            "wavelet_energy": [f"WVL_energy_{i}" for i in range(10)],
+            "mfcc": [f"MFCC_{i}" for i in range(13)],
+            "lpcc": [f"LPCC_{i}" for i in range(12)],
         }
         for f in features_to_use:
             if f in feature_functions:
@@ -736,21 +855,34 @@ class TSFelExtractor:
                     # TODO: fix more gracefully
                     result, time_elapsed = time_function(fun)(ts_data)
                 except:
-                    if f in ['wavelet_abs_mean', 'wavelet_std', 'wavelet_var',
-                         'wavelet_energy', 'mfcc', 'lpcc']:
+                    if f in [
+                        "wavelet_abs_mean",
+                        "wavelet_std",
+                        "wavelet_var",
+                        "wavelet_energy",
+                        "mfcc",
+                        "lpcc",
+                    ]:
                         result, time_elapsed = {n: np.nan for n in name_dict[f]}, 0
                     else:
                         result, time_elapsed = np.nan, np.nan
-                if f in ['wavelet_abs_mean', 'wavelet_std',
-                         'wavelet_energy', 'mfcc', 'lpcc']:
+                if f in [
+                    "wavelet_abs_mean",
+                    "wavelet_std",
+                    "wavelet_energy",
+                    "mfcc",
+                    "lpcc",
+                ]:
                     res.update(result)
                 else:
                     res[f] = result
                 self.duration_dict[f] += time_elapsed
         return res
 
-    def fit(self, df, id_col='id', val_col='value', time_col='dt'):
-        assert (self.features_to_use is not None), "Please provide a list of features to use"
+    def fit(self, df, id_col="id", val_col="value", time_col="dt"):
+        assert self.features_to_use is not None, (
+            "Please provide a list of features to use"
+        )
         df = df.sort_values(by=[id_col, time_col])
         _features = {}
         for _id in tqdm(df[id_col].unique()):
@@ -758,99 +890,119 @@ class TSFelExtractor:
             feats = self.tsfelfeatures(ts_data, features_to_use=self.features_to_use)
             _features[_id] = feats
         self.features = _features
-        self.duration_dict = {k: v/df.shape[0] for k,v in self.duration_dict.items()}
+        self.duration_dict = {k: v / df.shape[0] for k, v in self.duration_dict.items()}
 
     def transform(self):
         # Convert the features dictionary to a DataFrame
-        features_df = pd.DataFrame.from_dict(self.features,
-                                             orient='index').reset_index()
-        features_df = features_df.rename(columns={'index': 'id'})
-        features_df = features_df.set_index('id')
+        features_df = pd.DataFrame.from_dict(
+            self.features, orient="index"
+        ).reset_index()
+        features_df = features_df.rename(columns={"index": "id"})
+        features_df = features_df.set_index("id")
         return features_df
 
 
-def get_smoothNsmooth_diffStatistics(ts_raw: pd.DataFrame, 
-                                     ts_smooth: pd.DataFrame,
-                                     id_col: str='ID',
-                                     val_col: str='value',
-                                     time_col: str='dt')->pd.DataFrame:
+def get_smoothNsmooth_diffStatistics(
+    ts_raw: pd.DataFrame,
+    ts_smooth: pd.DataFrame,
+    id_col: str = "ID",
+    val_col: str = "value",
+    time_col: str = "dt",
+) -> pd.DataFrame:
     """
     Get the difference statistics between raw time series and its smoothed version.
-    
+
     Args:   ts_raw: np.array: raw time series
             ts_smooth: np.array: smoothed time series
-            
+
     Output: dict: difference statistics
     """
 
-    tsM = ts_raw.merge(ts_smooth,
-                        left_on=[id_col, time_col],
-                        right_on=[id_col, time_col],
-                        suffixes=('_raw', '_smoothed'))
-    
-    tsM = tsM.assign(diff = tsM[val_col+"_raw"] - tsM[val_col+"_smoothed"])
-    diffg = tsM.groupby(id_col)['diff']         
+    tsM = ts_raw.merge(
+        ts_smooth,
+        left_on=[id_col, time_col],
+        right_on=[id_col, time_col],
+        suffixes=("_raw", "_smoothed"),
+    )
+
+    tsM = tsM.assign(diff=tsM[val_col + "_raw"] - tsM[val_col + "_smoothed"])
+    diffg = tsM.groupby(id_col)["diff"]
     diff_mean = diffg.aggregate(lambda x: np.mean(x))
     diff_abs_mean = diffg.aggregate(lambda x: np.mean(np.abs(x)))
     diff_abs_median = diffg.aggregate(lambda x: np.median(np.abs(x)))
     diff_std = diffg.aggregate(lambda x: np.std(x))
     diff_skew = diffg.aggregate(lambda x: skew(x))
     diff_kurtosis = diffg.aggregate(lambda x: kurtosis(x))
-    
-    res = pd.concat([diff_mean, diff_abs_mean, diff_abs_median, 
-                     diff_std, diff_skew, diff_kurtosis], axis=1)
-    
-    res.columns = [f'diff{c}' for c in ['_mean', '_abs_mean', '_abs_median', 
-                                        '_std', '_skew', '_kurtosis']]
+
+    res = pd.concat(
+        [diff_mean, diff_abs_mean, diff_abs_median, diff_std, diff_skew, diff_kurtosis],
+        axis=1,
+    )
+
+    res.columns = [
+        f"diff{c}"
+        for c in ["_mean", "_abs_mean", "_abs_median", "_std", "_skew", "_kurtosis"]
+    ]
     return res
 
-def _psd_int(ts_data, integrator='trapezoidal'):
+
+def _psd_int(ts_data, integrator="trapezoidal"):
     """
     Get the integral of the power spectral density of the time series.
-    
+
     Args:   ts_data: np.array: time series data
             integrator: str: integration technique ['trapezoidal' or 'weighted']
-            
+
     Output: float: integral of the power spectral density
     """
     n_samples = len(ts_data)
     base_num = min(n_samples, 512)
-    
-    f, Pxx = signal.welch(ts_data, fs=1.0, nperseg=base_num, noverlap=int(0.5*base_num), nfft=2*base_num)
-    if integrator == 'trapezoidal':
+
+    f, Pxx = signal.welch(
+        ts_data,
+        fs=1.0,
+        nperseg=base_num,
+        noverlap=int(0.5 * base_num),
+        nfft=2 * base_num,
+    )
+    if integrator == "trapezoidal":
         psd_int = np.trapz(Pxx, f)
-    elif integrator == 'weighted':
-        psd_int = sum(f[1:]*np.diff(f)*(Pxx[:-1]+Pxx[1:]))
+    elif integrator == "weighted":
+        psd_int = sum(f[1:] * np.diff(f) * (Pxx[:-1] + Pxx[1:]))
     else:
         raise ValueError('Invalid integrator. Use "trapezoidal" or "weighted".')
     return psd_int
 
-def psd_int(df: pd.DataFrame,
-            id_col: str='ID', 
-            val_col: str='value',
-            time_col: str='dt',
-            integrator: str='trapezoidal')->pd.DataFrame:
+
+def psd_int(
+    df: pd.DataFrame,
+    id_col: str = "ID",
+    val_col: str = "value",
+    time_col: str = "dt",
+    integrator: str = "trapezoidal",
+) -> pd.DataFrame:
     """
     Get the integral of the power spectral density of the time series.
-    
+
     Args:   df: pd.DataFrame: time series data frame
             id_col: str: id column name
             val_col: str: value column name
             time_col: str: time column name
             integrator: str: integration technique ['trapezoidal' or 'weighted']
-            
+
     Output: pd.DataFrame: integral of the power spectral density
     """
     df = df.sort_values(by=[id_col, time_col])
-    res = {id_col: [], 'psd_int': []}
+    res = {id_col: [], "psd_int": []}
     for _id in tqdm(df[id_col].unique()):
         ts_data = df[df[id_col] == _id][val_col].values
-        
+
         psd_int = _psd_int(ts_data, integrator=integrator)
         res[id_col].append(_id)
-        res['psd_int'].append(psd_int)
-    
+        res["psd_int"].append(psd_int)
+
     return pd.DataFrame(res)
+
 
 @jit(forceobj=True)
 def get_spectral_entropy(x: np.ndarray, freq: int = 1) -> float:
@@ -876,6 +1028,7 @@ def get_spectral_entropy(x: np.ndarray, freq: int = 1) -> float:
 
     return -(entropy / np.log2(psd_norm.size))
 
+
 @jit(forceobj=True)
 def get_relative_entropy(x: np.ndarray) -> float:
     """
@@ -889,11 +1042,12 @@ def get_relative_entropy(x: np.ndarray) -> float:
     rel_entropy = entropy / max_entropy
     return rel_entropy
 
-#@jit(forceobj=True)
+
+# @jit(forceobj=True)
 def get_lumpiness(x: np.ndarray, window_size: int = 8) -> float:
     """
     source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
-        
+
     Calculating the lumpiness of time series.
     Lumpiness is defined as the variance of the chunk-wise variances.
 
@@ -909,8 +1063,9 @@ def get_lumpiness(x: np.ndarray, window_size: int = 8) -> float:
     v = [np.var(x_w) for x_w in np.array_split(x, len(x) // window_size + 1)]
     return np.var(v)
 
+
 # stability
-#@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_stability(x: np.ndarray, window_size: int = 8) -> float:
     """
     source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
@@ -954,16 +1109,18 @@ def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
     # Return the Hurst exponent from the polyfit output
     return poly[0] if not np.isnan(poly[0]) else 0
 
+
 @jit(forceobj=True)
 def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
     """
     Get the sum of the number of times the slope of the time series changes sign.
-    
+
     Args:   ts_data: np.array: time series data
-            
+
     Output: float: sum of the number of times the slope of the time series changes sign
     """
-    return np.sum(np.diff(np.sign(np.diff(ts_data))) != 0)/len(ts_data)
+    return np.sum(np.diff(np.sign(np.diff(ts_data))) != 0) / len(ts_data)
+
 
 @jit(forceobj=True)
 def get_linearity(x: np.ndarray) -> float:
@@ -984,22 +1141,22 @@ def get_linearity(x: np.ndarray) -> float:
 def _mann_kendall_test(data: np.ndarray) -> float:
     n = len(data)
     s = 0
-    for i in range(n-1):
-        for j in range(i+1, n):
+    for i in range(n - 1):
+        for j in range(i + 1, n):
             s += np.sign(data[j] - data[i])
-            
-    trend, _, _, z, Tau, s, var_s, slope, intercept = mk.original_test(data)
-    trend = 1 if trend == 'increasing' else -1 if trend == 'decreasing' else 0        
-    return s/n, z, Tau, s, var_s, slope, intercept, trend
 
-#@jit(forceobj=True)
-def extract_cwt_features(data: np.ndarray, 
-                         wavelet='mexh', 
-                         scales=np.array([2, 3, 7]), 
-                         sampling_period=1.0) -> np.ndarray:
+    trend, _, _, z, Tau, s, var_s, slope, intercept = mk.original_test(data)
+    trend = 1 if trend == "increasing" else -1 if trend == "decreasing" else 0
+    return s / n, z, Tau, s, var_s, slope, intercept, trend
+
+
+# @jit(forceobj=True)
+def extract_cwt_features(
+    data: np.ndarray, wavelet="mexh", scales=np.array([2, 3, 7]), sampling_period=1.0
+) -> np.ndarray:
     """
     Extract features from Continuous Wavelet Transform of time series data.
-    
+
     Parameters:
     -----------
     data : np.ndarray
@@ -1010,7 +1167,7 @@ def extract_cwt_features(data: np.ndarray,
         Scales for CWT (default: np.arange(1, 32))
     sampling_period : float, optional
         Sampling period for the input data (default: 1.0)
-        
+
     Returns:
     --------
     np.ndarray
@@ -1018,28 +1175,28 @@ def extract_cwt_features(data: np.ndarray,
     """
     # Normalize the data
     data = (data - np.mean(data)) / (np.std(data) if np.std(data) > 0 else 1)
-    
+
     # Default scales if not provided
     if scales is None:
         scales = np.arange(1, 32)
-    
+
     # Calculate CWT coefficients
     coefficients, frequencies = cwt(data, scales, wavelet, sampling_period)
-    
+
     # Extract features from the coefficients matrix
     features = []
-    
+
     # Global statistics across all scales
     features.append(np.mean(coefficients.flatten()))
     features.append(np.std(coefficients.flatten()))
     features.append(np.max(coefficients.flatten()))
     features.append(np.min(coefficients.flatten()))
     features.append(np.median(coefficients.flatten()))
-    
+
     # Energy of coefficients (sum of squares)
     energy = np.sum(coefficients**2)
     features.append(energy)
-    
+
     # Energy ratio in different frequency bands
     # Divide coefficients into 4 bands and calculate energy ratio
     num_bands = 4
@@ -1047,7 +1204,7 @@ def extract_cwt_features(data: np.ndarray,
     for band in bands:
         band_energy = np.sum(band**2)
         features.append(band_energy / energy if energy > 0 else 0)
-    
+
     # Statistics for each scale
     for i in range(3):  # Use first 5 scales or less
         scale_coef = coefficients[i]
@@ -1057,32 +1214,34 @@ def extract_cwt_features(data: np.ndarray,
     # Scale with maximum energy
     scale_energies = np.sum(coefficients**2, axis=1)
     features.append(np.argmax(scale_energies))
-       
+
     # Entropy measures
-    
+
     # Shannon entropy of the absolute coefficients
     def shannon_entropy(signal):
         # Normalize the signal to get probabilities
         abs_signal = np.abs(signal)
-        norm_signal = abs_signal / np.sum(abs_signal) if np.sum(abs_signal) > 0 else abs_signal
+        norm_signal = (
+            abs_signal / np.sum(abs_signal) if np.sum(abs_signal) > 0 else abs_signal
+        )
         # Remove zeros to avoid log(0)
         norm_signal = norm_signal[norm_signal > 0]
         return -np.sum(norm_signal * np.log2(norm_signal))
-    
+
     # Global Shannon entropy
     flattened_coeffs = coefficients.flatten()
     features.append(shannon_entropy(flattened_coeffs))
-    
+
     # Shannon entropy for each scale
     for i in range(min(3, len(scales))):  # First 3 scales
         features.append(shannon_entropy(coefficients[i]))
-    
+
     # Sample entropy (approximate using variance of log energy)
     log_energy = np.log(np.sum(coefficients**2, axis=1) + 1e-10)
-    features.append(np.var(log_energy))    
-    
+    features.append(np.var(log_energy))
+
     # Spectral entropy
-    power_spectrum = np.abs(np.mean(coefficients, axis=1))**2
+    power_spectrum = np.abs(np.mean(coefficients, axis=1)) ** 2
     total = np.sum(power_spectrum)
     if total > 0:
         prob = power_spectrum / total
@@ -1090,7 +1249,7 @@ def extract_cwt_features(data: np.ndarray,
         features.append(spectral_entropy)
     else:
         features.append(0)
-    
+
     # Permutation entropy approximation for the coefficient matrix
     # We'll use a simplified version by looking at patterns in adjacent scales
     # if len(scales) >= 3:
@@ -1098,7 +1257,7 @@ def extract_cwt_features(data: np.ndarray,
     #     n_points = min(100, coefficients.shape[1])
     #     step = coefficients.shape[1] // n_points if coefficients.shape[1] > n_points else 1
     #     subset = coefficients[:, ::step]
-        
+
     #     # Count patterns of increase/decrease across 3 consecutive scales
     #     patterns = np.zeros(6)  # 6 possible patterns for 3 consecutive values
     #     for t in range(subset.shape[1]):
@@ -1109,7 +1268,7 @@ def extract_cwt_features(data: np.ndarray,
     #             # Convert pattern to an index (0-5)
     #             pattern_idx = pattern[0] * 2 + pattern[1]
     #             patterns[pattern_idx] += 1
-        
+
     #     # Calculate entropy from pattern frequencies
     #     total_patterns = np.sum(patterns)
     #     if total_patterns > 0:
@@ -1121,7 +1280,7 @@ def extract_cwt_features(data: np.ndarray,
     #         features.append(0)
     # else:
     #     features.append(0)  # Default if not enough scales
-    
+
     # Wavelet entropy - relative energy at each scale
     if energy > 0:
         rel_energies = scale_energies / energy
@@ -1129,8 +1288,9 @@ def extract_cwt_features(data: np.ndarray,
         features.append(wavelet_entropy)
     else:
         features.append(0)
-    
+
     return np.array(features)
+
 
 @jit(forceobj=True)
 def get_het_arch(x: np.ndarray) -> float:
@@ -1148,6 +1308,7 @@ def get_het_arch(x: np.ndarray) -> float:
     """
 
     return het_arch(x, nlags=min(10, len(x) // 5))[0]
+
 
 @jit(forceobj=True)
 def get_stl_features(
@@ -1170,30 +1331,32 @@ def get_stl_features(
         Seasonality features including strength of trend, seasonality,
         spikiness, peak/trough.
     """
-    
-    assert(window>=period), "The smoothing window should be larger than or equal to the period"
+
+    assert window >= period, (
+        "The smoothing window should be larger than or equal to the period"
+    )
 
     stl_features = {}
 
     # STL decomposition
-    res = STL(x, period=period, seasonal=(window+abs(window%2-1)), robust=robust).fit()
-    
+    res = STL(
+        x, period=period, seasonal=(window + abs(window % 2 - 1)), robust=robust
+    ).fit()
+
     stl_features["var_trend"] = np.var(res.trend)
     stl_features["var_res"] = np.var(res.resid)
 
     # strength of trend
     stl_features["trend_strength"] = 1 - np.var(res.resid) / np.var(
-            res.trend + res.resid
-        )
+        res.trend + res.resid
+    )
 
     stl_features["seasonality_strength"] = 1 - np.var(res.resid) / np.var(
-            res.seasonal + res.resid
-        )
+        res.seasonal + res.resid
+    )
 
     # spikiness: variance of the leave-one-out variances of the remainder component
-    resid_array = np.repeat(
-        np.array(res.resid)[:, np.newaxis], len(res.resid), axis=1
-    )
+    resid_array = np.repeat(np.array(res.resid)[:, np.newaxis], len(res.resid), axis=1)
     resid_array[np.diag_indices(len(resid_array))] = np.NaN
     stl_features["spikiness"] = np.var(np.nanvar(resid_array, axis=0))
 
@@ -1205,14 +1368,15 @@ def get_stl_features(
 
     return stl_features
 
-#@jit(forceobj=False)
+
+# @jit(forceobj=False)
 def get_acf_features(
     y_acf_list: List[float],
     diff1y_acf_list: List[float],
     diff2y_acf_list: List[float],
     extra_args: Dict[str, bool],
-    default_status: bool=True,
-) -> Dict[str,float]:
+    default_status: bool = True,
+) -> Dict[str, float]:
     """
     Aggregating extracted Acwt(onary containing information for disabling calculation
             of a certain feature. If None, no feature is disabled.
@@ -1259,23 +1423,24 @@ def get_acf_features(
         seas_acf1 = y_acf_list[-1]
 
     return {
-        'acf1': y_acf1,
-        'acf5': y_acf5,
-        'diff1y_acf1': diff1y_acf1,
-        'diff1y_acf5': diff1y_acf5,
-        'diff2y_acf1': diff2y_acf1,
-        'diff2y_acf5': diff2y_acf5,
-        'seas_acf1': seas_acf1,
+        "acf1": y_acf1,
+        "acf5": y_acf5,
+        "diff1y_acf1": diff1y_acf1,
+        "diff1y_acf5": diff1y_acf5,
+        "diff2y_acf1": diff2y_acf1,
+        "diff2y_acf5": diff2y_acf5,
+        "seas_acf1": seas_acf1,
     }
 
-#@jit(forceobj=False)
+
+# @jit(forceobj=False)
 def get_pacf_features(
     y_pacf_list: List[float],
     diff1y_pacf_list: List[float],
     diff2y_pacf_list: List[float],
     extra_args: Dict[str, bool],
-    default_status: bool=True,
-) -> Dict[str,float]:
+    default_status: bool = True,
+) -> Dict[str, float]:
     """
     Aggregating extracted PACF features from get_acfpacf_features function.
 
@@ -1306,21 +1471,21 @@ def get_pacf_features(
     # diff2y_pacf5: sum of squares ocwt(
 
     return {
-        'pacf5': y_pacf5,
-        'diff1y_pacf5': diff1y_pacf5,
-        'diff2y_pacf5': diff2y_pacf5,
-        'seas_pacf1': seas_pacf1,
+        "pacf5": y_pacf5,
+        "diff1y_pacf5": diff1y_pacf5,
+        "diff2y_pacf5": diff2y_pacf5,
+        "seas_pacf1": seas_pacf1,
     }
 
-#@jit(forceobj=False)
-def get_acfpacf_features(
-        x: np.ndarray,
-        acfpacf_lag: int = 6,
-        period: int = 7,
-        extra_args: Optional[Dict[str, bool]] = None,
-        default_status: bool = True,
-    ) -> Dict[str, float]:
 
+# @jit(forceobj=False)
+def get_acfpacf_features(
+    x: np.ndarray,
+    acfpacf_lag: int = 6,
+    period: int = 7,
+    extra_args: Optional[Dict[str, bool]] = None,
+    default_status: bool = True,
+) -> Dict[str, float]:
     """
     Calculate ACF and PACF based features. Calculate seasonal ACF, PACF based features.
 
@@ -1341,9 +1506,19 @@ def get_acfpacf_features(
     Returns:
         Aggregated ACF, PACF features.
     """
-    _keys = ['y_acf1', 'y_acf5', 'diff1y_acf1', 'diff1y_acf5',
-             'diff2y_acf1', 'diff2y_acf5', 'y_pacf5', 'diff1y_pacf5',
-             'diff2y_pacf5', 'seas_acf1', 'seas_pacf1']
+    _keys = [
+        "y_acf1",
+        "y_acf5",
+        "diff1y_acf1",
+        "diff1y_acf5",
+        "diff2y_acf1",
+        "diff2y_acf5",
+        "y_pacf5",
+        "diff1y_pacf5",
+        "diff2y_pacf5",
+        "seas_acf1",
+        "seas_pacf1",
+    ]
     if extra_args is None:
         extra_args = {k: True for k in _keys}
 
@@ -1361,11 +1536,11 @@ def get_acfpacf_features(
         "seas_pacf1": np.nan,
     }
     if len(x) < 10 or len(x) < period or len(np.unique(x)) == 1:
-        #msg = (
+        # msg = (
         #    "Length is shorter than period, or constant time series, "
         #    "unable to calculate acf/pacf features"
-        #)
-        #logging.error(msg)
+        # )
+        # logging.error(msg)
         return acfpacf_features
 
     nlag = min(acfpacf_lag, len(x) - 2)
@@ -1379,10 +1554,7 @@ def get_acfpacf_features(
 
     y_pacf_list = pacf(x, nlags=period)[1:]
 
-    if (
-        _yule_walker_determinant(diff1x) == 0
-        or _yule_walker_determinant(diff2x) == 0
-    ):
+    if _yule_walker_determinant(diff1x) == 0 or _yule_walker_determinant(diff2x) == 0:
         logging.warning(
             "Could not generate acfpacf features because input matrix is singular."
         )
@@ -1391,36 +1563,42 @@ def get_acfpacf_features(
     diff1y_pacf_list = pacf(diff1x, nlags=nlag)[1:]
     diff2y_pacf_list = pacf(diff2x, nlags=nlag)[1:]
 
-    acfpacf_features.update(get_acf_features(
-                            y_acf_list,
-                            diff1y_acf_list,
-                            diff2y_acf_list,
-                            extra_args,
-                            default_status,
-                        ))
+    acfpacf_features.update(
+        get_acf_features(
+            y_acf_list,
+            diff1y_acf_list,
+            diff2y_acf_list,
+            extra_args,
+            default_status,
+        )
+    )
 
     # getting PACF features
-    acfpacf_features.update(get_pacf_features(
-                            y_pacf_list,
-                            diff1y_pacf_list,
-                            diff2y_pacf_list,
-                            extra_args,
-                            default_status,
-                        ))
+    acfpacf_features.update(
+        get_pacf_features(
+            y_pacf_list,
+            diff1y_pacf_list,
+            diff2y_pacf_list,
+            extra_args,
+            default_status,
+        )
+    )
     return {k: v for k, v in acfpacf_features.items() if v in _keys}
 
+
 def _yule_walker_determinant(x_list: List[float]) -> float:
-        x = np.array(x_list, dtype=np.float64)
+    x = np.array(x_list, dtype=np.float64)
 
-        if x.ndim > 1 and x.shape[1] != 1:
-            raise ValueError("expecting a vector to estimate AR parameters")
+    if x.ndim > 1 and x.shape[1] != 1:
+        raise ValueError("expecting a vector to estimate AR parameters")
 
-        x -= x.mean()
-        r = np.zeros(2, np.float64)
-        r[0] = (x**2).mean()
-        r[1] = (x[0:-1] * x[1:]).mean()
-        R = toeplitz(r[:-1])
-        return np.linalg.det(R)
+    x -= x.mean()
+    r = np.zeros(2, np.float64)
+    r[0] = (x**2).mean()
+    r[1] = (x[0:-1] * x[1:]).mean()
+    R = toeplitz(r[:-1])
+    return np.linalg.det(R)
+
 
 @jit(forceobj=True)
 def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
@@ -1436,90 +1614,113 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
     """
 
     if len(x) <= nbins:
-        #msg = (
+        # msg = (
         #    "Length of time series is shorter than nbins, unable to "
         #    "calculate flat spots feature"
-        #)
-        #logging.error(msg)
+        # )
+        # logging.error(msg)
         return np.nan
 
     max_run_length = 0
     window_size = int(len(x) / nbins)
     for i in range(0, len(x), window_size):
-        run_length = np.max(
-            [len(list(v)) for k, v in groupby(x[i : i + window_size])]
-        )
+        run_length = np.max([len(list(v)) for k, v in groupby(x[i : i + window_size])])
         if run_length > max_run_length:
             max_run_length = run_length
     return max_run_length
 
+
 @jit(forceobj=True)
-def avg_3rd_order(x: np.ndarray)-> float:
+def avg_3rd_order(x: np.ndarray) -> float:
     """
-        Requires a minimum of 4 points    
+    Requires a minimum of 4 points
     """
-    assert(x.shape[0]>4), "We would like a minimum of 5 points for averaging the 2nd diff"
+    assert x.shape[0] > 4, (
+        "We would like a minimum of 5 points for averaging the 2nd diff"
+    )
     xd3 = np.diff(x, n=3)
     return np.nanmean(xd3)
 
+
 @jit(forceobj=True)
-def avg_2nd_order(x: np.ndarray)-> float:
+def avg_2nd_order(x: np.ndarray) -> float:
     """
-        Requires a minimum of 4 points    
+    Requires a minimum of 4 points
     """
-    assert(x.shape[0]>3), "We would like a minimum of 4 points for averaging the 2nd diff"
+    assert x.shape[0] > 3, (
+        "We would like a minimum of 4 points for averaging the 2nd diff"
+    )
     xd2 = np.diff(x, n=2)
     return np.nanmean(xd2)
 
+
 @jit(forceobj=True)
-def avg_1st_order(x: np.ndarray)-> float:
+def avg_1st_order(x: np.ndarray) -> float:
     """
-        Requires a minimum of 3 points    
+    Requires a minimum of 3 points
     """
-    assert(x.shape[0]>2), "We would like a minimum of 3 points for averaging the 1nd diff"
+    assert x.shape[0] > 2, (
+        "We would like a minimum of 3 points for averaging the 1nd diff"
+    )
     xd1 = np.diff(x, n=1)
     return np.nanmean(xd1)
 
+
 @jit(forceobj=True)
-def diff_entropy_1st(x:np.ndarray) -> float:
-    assert(x.shape[0]>1), "We would like a minimum of 3 points for averaging the 1nd diff"
+def diff_entropy_1st(x: np.ndarray) -> float:
+    assert x.shape[0] > 1, (
+        "We would like a minimum of 3 points for averaging the 1nd diff"
+    )
     xd1 = np.diff(x, n=1)
     return get_relative_entropy(xd1)
 
+
 @jit(forceobj=True)
-def diff_entropy_2nd(x:np.ndarray) -> float:
-    assert(x.shape[0]>2), "We would like a minimum of 3 points for averaging the 1nd diff"
+def diff_entropy_2nd(x: np.ndarray) -> float:
+    assert x.shape[0] > 2, (
+        "We would like a minimum of 3 points for averaging the 1nd diff"
+    )
     xd2 = np.diff(x, n=2)
     return get_relative_entropy(xd2)
 
+
 @jit(forceobj=True)
-def diff_entropy_3rd(x:np.ndarray) -> float:
-    assert(x.shape[0]>3), "We would like a minimum of 3 points for averaging the 1nd diff"
+def diff_entropy_3rd(x: np.ndarray) -> float:
+    assert x.shape[0] > 3, (
+        "We would like a minimum of 3 points for averaging the 1nd diff"
+    )
     xd3 = np.diff(x, n=3)
     return get_relative_entropy(xd3)
+
 
 @jit(forceobj=True)
 def peak_over_mean(x: np.ndarray) -> float:
     max_v = x.max()
     mean_v = x.mean()
-    return max_v/mean_v
+    return max_v / mean_v
+
 
 @jit(forceobj=True)
 def peak_over_median(x: np.ndarray) -> float:
     max_v = x.max()
     median_v = np.median(x)
-    return max_v/median_v
+    return max_v / median_v
+
 
 @jit(forceobj=True)
 def first_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[0]
 
+
 @jit(forceobj=True)
 def second_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[1]
+
+
 @jit(forceobj=True)
 def last_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[-1]
+
 
 @jit(forceobj=True)
 def get_unitroot_kpss(x: np.ndarray) -> float:
@@ -1538,6 +1739,7 @@ def get_unitroot_kpss(x: np.ndarray) -> float:
         Test statistics acquired using KPSS test.
     """
     return kpss(x, regression="ct", nlags=1)[0]
+
 
 def get_holt_params(
     x: np.ndarray,
@@ -1571,6 +1773,7 @@ def get_holt_params(
     except Exception as e:
         logging.warning(f"Holt Linear failed {e}")
     return holt_params_features
+
 
 def get_hw_params(
     x: np.ndarray,
@@ -1614,7 +1817,8 @@ def get_hw_params(
         logging.warning(f"Holt-Winters failed {e}")
     return hw_params_features
 
-def negative_turning(signal)->float:
+
+def negative_turning(signal) -> float:
     """Computes number of negative turning points of the signal.
 
     Feature computational cost: 1
@@ -1630,10 +1834,14 @@ def negative_turning(signal)->float:
     """
     diff_sig = np.diff(signal)
     array_signal = np.arange(len(diff_sig[:-1]))
-    negative_turning_pts = np.where((diff_sig[array_signal] < 0) & (diff_sig[array_signal + 1] > 0))[0]
+    negative_turning_pts = np.where(
+        (diff_sig[array_signal] < 0) & (diff_sig[array_signal + 1] > 0)
+    )[0]
 
     return len(negative_turning_pts)
-def positive_turning(signal)->float:
+
+
+def positive_turning(signal) -> float:
     """Computes number of positive turning points of the signal.
 
     Feature computational cost: 1
@@ -1652,11 +1860,14 @@ def positive_turning(signal)->float:
 
     array_signal = np.arange(len(diff_sig[:-1]))
 
-    positive_turning_pts = np.where((diff_sig[array_signal + 1] < 0) & (diff_sig[array_signal] > 0))[0]
+    positive_turning_pts = np.where(
+        (diff_sig[array_signal + 1] < 0) & (diff_sig[array_signal] > 0)
+    )[0]
 
     return len(positive_turning_pts)
 
-def travelled_distance(signal)->float:
+
+def travelled_distance(signal) -> float:
     """Computes signal traveled distance.
 
     Calculates the total distance traveled by the signal
@@ -1677,7 +1888,8 @@ def travelled_distance(signal)->float:
     diff_sig = np.diff(signal).astype(float)
     return np.sum([np.sqrt(1 + diff_sig**2)])
 
-def auc(signal, fs=1)->float:
+
+def auc(signal, fs=1) -> float:
     """Computes the area under the curve of the signal computed with trapezoid
     rule.
 
@@ -1686,7 +1898,10 @@ def auc(signal, fs=1)->float:
     Parametersimport ecg
     """
 
-    return np.sum(0.5 * np.diff(t) * np.abs(np.array(signal[:-1]) + np.array(signal[1:])))
+    return np.sum(
+        0.5 * np.diff(t) * np.abs(np.array(signal[:-1]) + np.array(signal[1:]))
+    )
+
 
 def lempel_ziv(signal, threshold=None):
     """Computes the Lempel-Ziv's (LZ) complexity index, normalized by the
@@ -1712,7 +1927,8 @@ def lempel_ziv(signal, threshold=None):
     lz_index = _calc_lempel_ziv_complexity(string_binary_signal)
     return lz_index
 
-def median_abs_deviation(signal)->float:
+
+def median_abs_deviation(signal) -> float:
     """Computes median absolute deviation of the signal.
 
     Feature computational cost: 1
@@ -1727,6 +1943,7 @@ def median_abs_deviation(signal)->float:
         Mean absolute deviation result
     """
     return scipy.stats.median_abs_deviation(signal, scale=1)
+
 
 def ecdf(signal, d=10):
     """Computes the values of ECDF (empirical cumulative distribution function)
@@ -1752,6 +1969,7 @@ def ecdf(signal, d=10):
     else:
         return tuple(y[:d])
 
+
 def _compute_time(signal, fs):
     """Creates the signal correspondent time array.
 
@@ -1770,7 +1988,8 @@ def _compute_time(signal, fs):
 
     return np.arange(0, len(signal)) / fs
 
-def _calc_lempel_ziv_complexity(sequence)->float:
+
+def _calc_lempel_ziv_complexity(sequence) -> float:
     """Manual implementation of the Lempel-Ziv complexity.
 
     It is defined as the number of different substrings encountered as
@@ -1806,7 +2025,8 @@ def _calc_lempel_ziv_complexity(sequence)->float:
 
     return len(sub_strings) / len(sequence)
 
-def spectral_distance(signal, fs=1)->float:
+
+def spectral_distance(signal, fs=1) -> float:
     """Computes the signal spectral distance.
 
     Distance of the signal's cumulative sum of the FFT elements to
@@ -1835,7 +2055,8 @@ def spectral_distance(signal, fs=1)->float:
 
     return np.sum(points_y - cum_fmag)
 
-def fundamental_frequency(signal, fs=1)->float:
+
+def fundamental_frequency(signal, fs=1) -> float:
     """Computes fundamental frequency of the signal.
 
     The fundamental frequency integer multiple best explain
@@ -1870,7 +2091,8 @@ def fundamental_frequency(signal, fs=1)->float:
         f0 = f[min(bp)]
     return f0
 
-def max_power_spectrum(signal, fs=1)->float:
+
+def max_power_spectrum(signal, fs=1) -> float:
     """Computes maximum power spectrum density of the signal.
 
     Feature computational cost: 1
@@ -1893,7 +2115,7 @@ def max_power_spectrum(signal, fs=1)->float:
         return float(max(welch(signal / np.std(signal), fs, nperseg=len(signal))[1]))
 
 
-def max_frequency(signal, fs=1)->float:
+def max_frequency(signal, fs=1) -> float:
     """Computes maximum frequency of the signal.
 
     Feature computational cost: 2
@@ -1921,7 +2143,7 @@ def max_frequency(signal, fs=1)->float:
     return f[ind_mag]
 
 
-def median_frequency(signal, fs=1)->float:
+def median_frequency(signal, fs=1) -> float:
     """Computes median frequency of the signal.
 
     Feature computational cost: 1
@@ -1949,7 +2171,7 @@ def median_frequency(signal, fs=1)->float:
     return f_median
 
 
-def spectral_centroid(signal, fs=1)->float:
+def spectral_centroid(signal, fs=1) -> float:
     """Barycenter of the spectrum.
 
     Description and formula in Article:
@@ -1977,7 +2199,7 @@ def spectral_centroid(signal, fs=1)->float:
         return np.dot(f, fmag / np.sum(fmag))
 
 
-def spectral_decrease(signal, fs=1)->float:
+def spectral_decrease(signal, fs=1) -> float:
     """Represents the amount of decreasing of the spectra amplitude.
 
     Description and formula in Article:
@@ -2016,7 +2238,7 @@ def spectral_decrease(signal, fs=1)->float:
         return soma_den * soma_num
 
 
-def spectral_kurtosis(signal, fs=1)->float:
+def spectral_kurtosis(signal, fs=1) -> float:
     """Measures the flatness of a distribution around its mean value.
 
     Description and formula in Article:
@@ -2045,7 +2267,7 @@ def spectral_kurtosis(signal, fs=1)->float:
         return np.sum(spect_kurt) / (spectral_spread(signal, fs) ** 4)
 
 
-def spectral_skewness(signal, fs=1)->float:
+def spectral_skewness(signal, fs=1) -> float:
     """Measures the asymmetry of a distribution around its mean value.
 
     Description and formula in Article:
@@ -2076,7 +2298,7 @@ def spectral_skewness(signal, fs=1)->float:
         return np.sum(skew) / (spectral_spread(signal, fs) ** 3)
 
 
-def spectral_spread(signal, fs=1)->float:
+def spectral_spread(signal, fs=1) -> float:
     """Measures the spread of the spectrum around its mean value.
 
     Description and formula in Article:
@@ -2106,7 +2328,7 @@ def spectral_spread(signal, fs=1)->float:
         return np.dot(((f - spect_centroid) ** 2), (fmag / np.sum(fmag))) ** 0.5
 
 
-def spectral_slope(signal, fs=1)->float:
+def spectral_slope(signal, fs=1) -> float:
     """Computes the spectral slope.
 
     Spectral slope is computed by finding constants m and b of the function aFFT = mf + b, obtained by linear regression
@@ -2147,7 +2369,7 @@ def spectral_slope(signal, fs=1)->float:
             return num_ / denom_
 
 
-def spectral_variation(signal, fs=1)->float:
+def spectral_variation(signal, fs=1) -> float:
     """Computes the amount of variation of the spectrum along time.
 
     Spectral variation is computed from the normalized cross-correlation between two consecutive amplitude spectra.
@@ -2183,7 +2405,7 @@ def spectral_variation(signal, fs=1)->float:
     return variation
 
 
-def spectral_positive_turning(signal, fs=1)->float:
+def spectral_positive_turning(signal, fs=1) -> float:
     """Computes number of positive turning points of the fft magnitude signal.
 
     Feature computational cost: 1
@@ -2205,11 +2427,14 @@ def spectral_positive_turning(signal, fs=1)->float:
 
     array_signal = np.arange(len(diff_sig[:-1]))
 
-    positive_turning_pts = np.where((diff_sig[array_signal + 1] < 0) & (diff_sig[array_signal] > 0))[0]
+    positive_turning_pts = np.where(
+        (diff_sig[array_signal + 1] < 0) & (diff_sig[array_signal] > 0)
+    )[0]
 
     return len(positive_turning_pts)
 
-def spectral_roll_off(signal, fs=1)->float:
+
+def spectral_roll_off(signal, fs=1) -> float:
     """Computes the spectral roll-off of the signal.
 
     The spectral roll-off corresponds to the frequency where 95% of the signal magnitude is contained
@@ -2239,8 +2464,7 @@ def spectral_roll_off(signal, fs=1)->float:
         return np.nan
 
 
-
-def spectral_roll_on(signal, fs=1)->float:
+def spectral_roll_on(signal, fs=1) -> float:
     """Computes the spectral roll-on of the signal.
 
     The spectral roll-on corresponds to the frequency where 5% of the signal magnitude is contained
@@ -2267,15 +2491,15 @@ def spectral_roll_on(signal, fs=1)->float:
 
     # cumulative sum and index where it first exceeds the threshold
     cum_mag = np.cumsum(fmag)
-    idx = np.searchsorted(cum_mag, threshold, side='left')
+    idx = np.searchsorted(cum_mag, threshold, side="left")
 
     # guard against edge cases
     if idx >= len(f):
         return f[-1]
     return f[idx]
-    
 
-def spectral_entropy(signal, fs=1)->float:
+
+def spectral_entropy(signal, fs=1) -> float:
     """Computes the spectral entropy of the signal based on Fourier transform.
 
     Feature computational cost: 1
@@ -2312,7 +2536,10 @@ def spectral_entropy(signal, fs=1)->float:
 
     return -np.multiply(prob, np.log2(prob)).sum() / np.log2(prob.size)
 
-def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22)->float:
+
+def mfcc(
+    signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_lifter=22
+) -> float:
     """Computes the MEL cepstral coefficients.
 
     It provides the information about the power in each frequency band.
@@ -2347,20 +2574,25 @@ def mfcc(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40, num_ceps=12, cep_l
     """
     filter_banks = _filterbank(signal, fs, pre_emphasis, nfft, nfilt)
 
-    mel_coeff = dct(filter_banks, type=2, axis=0, norm="ortho")[1 : (num_ceps + 1)]  # Keep 2-13
+    mel_coeff = dct(filter_banks, type=2, axis=0, norm="ortho")[
+        1 : (num_ceps + 1)
+    ]  # Keep 2-13
 
     mel_coeff -= np.mean(mel_coeff, axis=0) + 1e-8
 
     # liftering
     ncoeff = len(mel_coeff)
     n = np.arange(ncoeff)
-    lift = 1 + (cep_lifter / 2) * np.sin(np.pi * n / cep_lifter)  # cep_lifter = 22 from python_speech_features library
+    lift = 1 + (cep_lifter / 2) * np.sin(
+        np.pi * n / cep_lifter
+    )  # cep_lifter = 22 from python_speech_features library
 
     mel_coeff *= lift
 
-    return {f'MFCC_{k}': v for k,v in enumerate(tuple(mel_coeff))}
+    return {f"MFCC_{k}": v for k, v in enumerate(tuple(mel_coeff))}
 
-def lpcc(signal, n_coeff=12)->float:
+
+def lpcc(signal, n_coeff=12) -> float:
     """Computes the linear prediction cepstral coefficients.
 
     Implementation details and description in:
@@ -2390,11 +2622,10 @@ def lpcc(signal, n_coeff=12)->float:
     powerspectrum = np.abs(np.fft.fft(lpc_coeffs)) ** 2
     lpcc_coeff = np.fft.ifft(np.log(powerspectrum))
 
-    return {f'LPCC_{k}': v for k, v in enumerate(tuple(np.abs(lpcc_coeff)))}
+    return {f"LPCC_{k}": v for k, v in enumerate(tuple(np.abs(lpcc_coeff)))}
 
 
-
-def cumuvals(signal, d=5)->float:
+def cumuvals(signal, d=5) -> float:
     """Computes the values of cumulative values
     along the time axis.
 
@@ -2417,11 +2648,12 @@ def cumuvals(signal, d=5)->float:
     length = len(signal)
     if len(signal) > d:
         y = y[np.arange(0, length, length // d)]
-        return {f'cumfunval_{k}': y[k] for k in range(0, d)}
+        return {f"cumfunval_{k}": y[k] for k in range(0, d)}
     else:
-        return {f'cumfunval_{k}': np.nan for k in range(0, d)}
+        return {f"cumfunval_{k}": np.nan for k in range(0, d)}
 
-def _filterbank(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40)->float:
+
+def _filterbank(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40) -> float:
     """Computes the MEL-spaced filterbank.
 
     It provides the information about the power in each frequency band.
@@ -2480,15 +2712,18 @@ def _filterbank(signal, fs=1, pre_emphasis=0.97, nfft=512, nfilt=40)->float:
 
     fbank = np.zeros((nfilt, int(np.floor(nfft / 2 + 1))))
     for m in np.arange(1, nfilt + 1):
-
         f_m_minus = int(filter_bin[m - 1])  # left
         f_m = int(filter_bin[m])  # center
         f_m_plus = int(filter_bin[m + 1])  # right
 
         for k in np.arange(f_m_minus, f_m):
-            fbank[m - 1, k] = (k - filter_bin[m - 1]) / (filter_bin[m] - filter_bin[m - 1])
+            fbank[m - 1, k] = (k - filter_bin[m - 1]) / (
+                filter_bin[m] - filter_bin[m - 1]
+            )
         for k in np.arange(f_m, f_m_plus):
-            fbank[m - 1, k] = (filter_bin[m + 1] - k) / (filter_bin[m + 1] - filter_bin[m])
+            fbank[m - 1, k] = (filter_bin[m + 1] - k) / (
+                filter_bin[m + 1] - filter_bin[m]
+            )
 
     # Area Normalization
     # If we don't normalize the noise will increase with frequency because of the filter width.
@@ -2550,6 +2785,7 @@ def _lpc(signal, n_coeff=12):
 
     return tuple(np.concatenate(([1.0], lpc_coeffs)))
 
+
 def _create_symmetric_matrix(acf, order=11):
     """Computes a symmetric matrix.
 
@@ -2577,6 +2813,7 @@ def _create_symmetric_matrix(acf, order=11):
 
     return smatrix
 
+
 @jit(nopython=True)
 def _calc_cumfun(signal):
     """Computes the ECDF of the signal.
@@ -2590,7 +2827,8 @@ def _calc_cumfun(signal):
     nd-array
       Sorted signal and computed ECDF.
     """
-    return np.sort(signal), np.cumsum(signal)/(np.arange(1,signal.shape[0]+1))
+    return np.sort(signal), np.cumsum(signal) / (np.arange(1, signal.shape[0] + 1))
+
 
 def _calc_fft(signal, fs=1):
     """This functions computes the fft of a signal.
@@ -2616,18 +2854,19 @@ def _calc_fft(signal, fs=1):
 
 
 # similarity with pre-defined shapes
-#@jit(forceobj=True)
+# @jit(forceobj=True)
 def compute_dtw(x, y):
     return fastdtw(x, y)[0]
 
+
 def shape_compare(x: np.ndarray) -> dict:
     lenX = x.shape[0]
-    tDummy = np.arange(0, lenX, dtype='float64')
+    tDummy = np.arange(0, lenX, dtype="float64")
 
     try:
         lenX_inv = 1 / lenX
-        tDummy_sq = tDummy ** 2
-        lenX_sq_inv = lenX_inv ** 2
+        tDummy_sq = tDummy**2
+        lenX_sq_inv = lenX_inv**2
 
         xLinearUp = tDummy * lenX_inv
         xLinearDown = -xLinearUp
@@ -2638,7 +2877,7 @@ def shape_compare(x: np.ndarray) -> dict:
         xCos = np.cos(2 * np.pi * tDummy * lenX_inv)
 
         half_lenX = lenX // 2
-        half_lenX_array = half_lenX * np.ones((half_lenX + lenX % 2), dtype='float64')
+        half_lenX_array = half_lenX * np.ones((half_lenX + lenX % 2), dtype="float64")
 
         # first-up-then-down
         ts_fUtD = np.hstack([tDummy[:half_lenX], lenX - tDummy[half_lenX:]])
@@ -2660,42 +2899,44 @@ def shape_compare(x: np.ndarray) -> dict:
 
         # List of (name, series) tuples
         series_list = [
-            ('sim_linup', xLinearUp),
-            ('sim_lindown', xLinearDown),
-            ('sim_qup', xQup),
-            ('sim_qdown', xQdown),
-            ('sim_sinfu', xSinFU),
-            ('sim_sinfd', xSinFD),
-            ('sim_cos', xCos),
-            ('sim_fUtD', ts_fUtD[:lenX]),
-            ('sim_fDtU', ts_fDtU[:lenX]),
-            ('sim_fUtS', ts_fUtS[:lenX]),
-            ('sim_fDtS', ts_fDtS[:lenX]),
-            ('sim_fStD', ts_fStD[:lenX]),
-            ('sim_fStU', ts_fStU[:lenX])
+            ("sim_linup", xLinearUp),
+            ("sim_lindown", xLinearDown),
+            ("sim_qup", xQup),
+            ("sim_qdown", xQdown),
+            ("sim_sinfu", xSinFU),
+            ("sim_sinfd", xSinFD),
+            ("sim_cos", xCos),
+            ("sim_fUtD", ts_fUtD[:lenX]),
+            ("sim_fDtU", ts_fDtU[:lenX]),
+            ("sim_fUtS", ts_fUtS[:lenX]),
+            ("sim_fDtS", ts_fDtS[:lenX]),
+            ("sim_fStD", ts_fStD[:lenX]),
+            ("sim_fStU", ts_fStU[:lenX]),
         ]
 
         # Parallel DTW computation
-        results = joblib.Parallel(n_jobs=-1)(joblib.delayed(compute_dtw)(x, series) for _, series in series_list)
+        results = joblib.Parallel(n_jobs=-1)(
+            joblib.delayed(compute_dtw)(x, series) for _, series in series_list
+        )
 
         # Combine results into dictionary
         out_dict = {name: result for (name, _), result in zip(series_list, results)}
 
     except Exception as e:
         return {
-            'sim_linup': np.nan,
-            'sim_lindown': np.nan,
-            'sim_qup': np.nan,
-            'sim_qdown': np.nan,
-            'sim_sinfu': np.nan,
-            'sim_sinfd': np.nan,
-            'sim_cos': np.nan,
-            'sim_fUtD': np.nan,
-            'sim_fDtU': np.nan,
-            'sim_fUtS': np.nan,
-            'sim_fDtS': np.nan,
-            'sim_fStD': np.nan,
-            'sim_fStU': np.nan,
+            "sim_linup": np.nan,
+            "sim_lindown": np.nan,
+            "sim_qup": np.nan,
+            "sim_qdown": np.nan,
+            "sim_sinfu": np.nan,
+            "sim_sinfd": np.nan,
+            "sim_cos": np.nan,
+            "sim_fUtD": np.nan,
+            "sim_fDtU": np.nan,
+            "sim_fUtS": np.nan,
+            "sim_fDtS": np.nan,
+            "sim_fStD": np.nan,
+            "sim_fStU": np.nan,
         }
 
     return out_dict
@@ -2708,27 +2949,27 @@ def FourierCoefficients(timeseries, number_of_components=25) -> Dict[str, float]
 
     result: Dict[str, float] = {}
     for k, f in enumerate(freqs):
-        cos_c = (2/N) * np.sum(timeseries * np.cos(2*np.pi*f*t))
-        sin_c = (2/N) * np.sum(timeseries * np.sin(2*np.pi*f*t))
-        result[f'ff_freq_{k}'] = f
-        result[f'ff_cos_{k}']  = cos_c
-        result[f'ff_sin_{k}']  = sin_c
+        cos_c = (2 / N) * np.sum(timeseries * np.cos(2 * np.pi * f * t))
+        sin_c = (2 / N) * np.sum(timeseries * np.sin(2 * np.pi * f * t))
+        result[f"ff_freq_{k}"] = f
+        result[f"ff_cos_{k}"] = cos_c
+        result[f"ff_sin_{k}"] = sin_c
 
     return result
 
 
 @njit
 def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
-    '''
-        Function to get n-regularly spaced kth order discrete differences
-        Note: this function only makes sense if absolute timing is important.
+    """
+    Function to get n-regularly spaced kth order discrete differences
+    Note: this function only makes sense if absolute timing is important.
 
-        ts: homogeneous time series
-        k: number of points in regular intervals
-        n: max order of the discrete differences
+    ts: homogeneous time series
+    k: number of points in regular intervals
+    n: max order of the discrete differences
 
-        return: [n-regularly spaced differences * order of the differences]
-    '''
+    return: [n-regularly spaced differences * order of the differences]
+    """
     N = len(ts)
     res = []
     diffs = ts
@@ -2737,6 +2978,7 @@ def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
         diffs = np.diff(diffs)
         res.extend(diffs[np.arange(0, len(diffs), ts_step)])
     return res
+
 
 def extract_peaks_and_valleys(y, N=10):
     # Credits: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
@@ -2760,8 +3002,8 @@ def extract_peaks_and_valleys(y, N=10):
     # Pad with zeros if fewer than N extrema are found
     if len(top_extrema) < N:
         padding = 10 - len(top_extrema)
-        top_extrema = np.pad(top_extrema, (0, padding), 'constant', constant_values=0)
-        top_values = np.pad(top_values, (0, padding), 'constant', constant_values=0)
+        top_extrema = np.pad(top_extrema, (0, padding), "constant", constant_values=0)
+        top_values = np.pad(top_values, (0, padding), "constant", constant_values=0)
 
     # Prepare the features
     features = []
@@ -2770,15 +3012,18 @@ def extract_peaks_and_valleys(y, N=10):
         features.append(top_extrema[i])
 
     # Create a dictionary of features
-    feature_dict = {f'peak_{i+1}': features[2*i] for i in range(N)}
-    feature_dict.update({f'loc_{i+1}': features[2*i+1] for i in range(N)})
+    feature_dict = {f"peak_{i + 1}": features[2 * i] for i in range(N)}
+    feature_dict.update({f"loc_{i + 1}": features[2 * i + 1] for i in range(N)})
 
     return feature_dict
 
-def extract_fft_features(y, x=None, num_features=5, max_frequency=40)->Dict[str,float]:
+
+def extract_fft_features(
+    y, x=None, num_features=5, max_frequency=40
+) -> Dict[str, float]:
     """
     Extract frequency domain features from a time series signal using FFT.
-    
+
     Parameters:
     -----------
     y : array-like
@@ -2789,121 +3034,123 @@ def extract_fft_features(y, x=None, num_features=5, max_frequency=40)->Dict[str,
         Number of top frequency components to extract.
     max_frequency : float, default=40
         Maximum frequency (Hz) to consider.
-        
+
     Returns:
     --------
     dict
         Dictionary containing the top amplitudes, frequencies, and phases.
         Keys are 'Amplitude N', 'Frequency N', and 'Phase N' where N is 1 to num_features.
-    
+
     Credits:
     --------
     Adapted from: https://towardsdatascience.com/feature-extraction-for-time-series-from-theory-to-practice-with-python-25631c6d8fcb
     """
     import numpy as np
-    
+
     # Input validation
     y = np.asarray(y)
     if len(y) == 0:
         raise ValueError("Input signal y cannot be empty")
-        
+
     # Prepare time series data
     y_centered = y - np.mean(y)
-    
+
     # Handle time points
     if x is None:
         x = np.linspace(0, len(y), len(y))
     else:
         x = np.asarray(x)
         if len(x) != len(y):
-            raise ValueError(f"Length of x ({len(x)}) must match length of y ({len(y)})")
-    
+            raise ValueError(
+                f"Length of x ({len(x)}) must match length of y ({len(y)})"
+            )
+
     # Compute FFT
     Y = np.fft.fft(y_centered)
-    
+
     # Calculate frequency bins
     time_step = (x[1] - x[0]) / (2 * np.pi)
     frequencies = np.fft.fftfreq(len(y), d=time_step)
-    
+
     # Calculate amplitude spectrum
     amplitudes = 2 * np.abs(Y) / len(y)
     amplitudes[amplitudes < 1e-6] = 0  # Remove numerical noise
-    
+
     # Filter to relevant frequencies
     relevant_indices = np.where((frequencies > 0) & (frequencies < max_frequency))[0]
-    
+
     # Ensure we have enough relevant frequencies
     if len(relevant_indices) == 0:
         raise ValueError(f"No frequencies found between 0 and {max_frequency}Hz")
-    
+
     # Extract relevant frequency domain information
     filtered_phases = np.angle(Y)[relevant_indices]
     filtered_frequencies = frequencies[relevant_indices]
     filtered_amplitudes = amplitudes[relevant_indices]
-    
+
     # Get indices of top frequency components
     num_components = min(num_features, len(filtered_amplitudes))
     top_indices = np.flip(np.argsort(filtered_amplitudes))[:num_components]
-    
+
     # Extract top components
     top_amplitudes = filtered_amplitudes[top_indices]
     top_frequencies = filtered_frequencies[top_indices]
     top_phases = filtered_phases[top_indices]
-    
+
     # Pad with zeros if not enough components found
     if num_components < num_features:
         top_amplitudes = np.pad(top_amplitudes, (0, num_features - num_components))
         top_frequencies = np.pad(top_frequencies, (0, num_features - num_components))
         top_phases = np.pad(top_phases, (0, num_features - num_components))
-    
+
     # Build feature dictionary
     all_features = (
-        top_amplitudes.tolist() + 
-        top_frequencies.tolist() + 
-        top_phases.tolist()
+        top_amplitudes.tolist() + top_frequencies.tolist() + top_phases.tolist()
     )
-    
+
     # Create dictionary keys
     feature_keys = (
-        [f'Amplitude {i}' for i in range(1, num_features + 1)] +
-        [f'Frequency {i}' for i in range(1, num_features + 1)] +
-        [f'Phase {i}' for i in range(1, num_features + 1)]
+        [f"Amplitude {i}" for i in range(1, num_features + 1)]
+        + [f"Frequency {i}" for i in range(1, num_features + 1)]
+        + [f"Phase {i}" for i in range(1, num_features + 1)]
     )
-    
+
     # Create and return the feature dictionary
     return dict(zip(feature_keys, all_features))
 
-def spline_params(y, monotonic=True, weighted=True, max_params = 20):
+
+def spline_params(y, monotonic=True, weighted=True, max_params=20):
     TF = 10
-    pseudo_time = np.arange(0, len(y),1)
+    pseudo_time = np.arange(0, len(y), 1)
     if monotonic:
         interp = interpolate.PchipInterpolator(pseudo_time, y, extrapolate=False)
     else:
         interp = interpolate.Akima1DInterpolator(pseudo_time, y, extrapolate=False)
 
-    _roots  = interp.roots()
+    _roots = interp.roots()
     _derivs = interp._find_derivatives(pseudo_time, y)
 
     if weighted:
-        weights = np.ones(len(_derivs)) + TF*pseudo_time
+        weights = np.ones(len(_derivs)) + TF * pseudo_time
     else:
         weights = np.ones(len(_derivs))
 
     if max(len(_roots), len(_derivs)) > max_params:
-        step_r = max(len(_roots)//max_params, 1)
-        step_d = max(len(_derivs)//max_params, 1)
+        step_r = max(len(_roots) // max_params, 1)
+        step_d = max(len(_derivs) // max_params, 1)
 
-        d = {f'root_{i}': _root for i, _root in enumerate(_roots)
-              if i%step_r==0}
-        d.update({
-            f'deriv_{i}': _deriv*weights[i] for i, _deriv in enumerate(_derivs)
-              if i%step_d==0
-        })
+        d = {f"root_{i}": _root for i, _root in enumerate(_roots) if i % step_r == 0}
+        d.update(
+            {
+                f"deriv_{i}": _deriv * weights[i]
+                for i, _deriv in enumerate(_derivs)
+                if i % step_d == 0
+            }
+        )
     else:
-        d = {f'root_{i}': _root for i, _root in enumerate(_roots)}
-        d.update({
-            f'deriv_{i}': _deriv*weights[i] for i, _deriv in enumerate(_derivs)
-        })
+        d = {f"root_{i}": _root for i, _root in enumerate(_roots)}
+        d.update(
+            {f"deriv_{i}": _deriv * weights[i] for i, _deriv in enumerate(_derivs)}
+        )
 
     return d
-

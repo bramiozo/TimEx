@@ -1,4 +1,5 @@
 from statistics import stdev
+from typing import List, Literal, Optional
 # exposes clustering methods from tslearn, aeon, tscluster, deeptime, and pypots
 # [ ] tslearn
 # [ ] aeon
@@ -7,6 +8,7 @@ from statistics import stdev
 # [ ] pypots
 
 from asyncio import SelectorEventLoop
+from tabnanny import verbose
 from timex import extractor
 from timex import preprocessing
 
@@ -15,51 +17,52 @@ from numpy import ndarray
 
 from tslearn import clustering as tslearn_clustering
 
-from sklearn.cluster import GaussianMixture, BayesianGaussianMixture
+from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.base import BaseEstimator, ClusterMixin
 
+from sklearn.experimental import enable_iterative_imputer  # noqa
+from sklearn.impute import IterativeImputer, KNNImputer, SimpleImputer
+from sklearn.preprocessing import StandardScaler
+import miceforest as mf
+
+from sklearn.metrics import (
+    davies_bouldin_score,
+    calinski_harabasz_score,
+    silhouette_score,
+)
 from scipy.stats import entropy
-# distance based clustering
-class TSKMeans:
-    # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.TimeSeriesKMeans.html#tslearn.clustering.TimeSeriesKMeans
-    def __init__(self, backend="tslearn", n_clusters=3, **kwargs):
-        if backend == "tslearn":
-            self.clusterer = tslearn_clustering.TimeSeriesKMeans(
-                n_clusters=n_clusters, **kwargs
-            )
 
-    def fit(self, ts):
-        pass
+from umap import UMAP
 
-# distance based clustering
-class TSKernelKMeans:
-    # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.KernelKMeans.html#tslearn.clustering.KernelKMeans
-    def __init__(self):
-        pass
+import time
+import logging
 
-    def fit(self, ts):
-        pass
-
-# distance based clustering
-class TSKShape:
-    # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.KShape.html#tslearn.clustering.KShape
-    def __init__(self):
-        pass
-
-    def fit(self, ts):
-        pass
+# adding logger
+#
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.DEBUG,  # or logging.DEBUG for more verbose output
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler()  # This will output to the notebook cell
+    ],
+)
 
 
 class CrossSectionalClustering(BaseEstimator, ClusterMixin):
     # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.CrossSectionalClustering.html#tslearn.clustering.CrossSectionalClustering
     def __init__(
         self,
-        smoothing: bool=False,
-        smoothing_type: Literal["gaussian_kernel", "rolling_mean"],
-        smoothing_window_size: int = 10,
+        smoothing: bool = False,
+        smoothing_type: Literal[
+            "gaussian_kernel", "gaussian_kernel_simple", "box_kernel", "rolling_mean"
+        ] = "gaussian_kernel",
+        smoothing_window_size: int = 4,
+        n_skip: int = 1,
         interpolation: bool = False,
-        interpolation_resolution: int = 30,
+        interpolation_resolution: int = 1,
         interpolation_keep_init: bool = False,
+        analysis_resolution: int = 90,
         min_measurements_per_id: int = 10,
         min_time: Optional[int] = None,
         max_time: Optional[int] = None,
@@ -76,15 +79,21 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 "katz",
                 "tsfel",
             ]
-        ] = None,
-        clustering_algorithm: Literal["gmm", "bgmm", "kmeans", "optics", "hdbscan", "spectral", "hierarchical"],
-        normalise_timeseries: Optional[Literal["bulk", "group"]] = None,
-        normalisation_method: Optional[Literal["standard", "minmax"]] = None,
-        id_column: str,
-        time_column: str,
-        feature_columns: str,
+        ] = ["custom"],
+        clustering_algorithm: Literal[
+            "gmm", "bgmm", "kmeans", "optics", "hdbscan", "spectral", "hierarchical"
+        ] = "gmm",
+        normalise_timeseries: Optional[Literal["bulk", "group"]] = "group",
+        normalisation_method: Optional[Literal["standard", "minmax"]] = "standard",
+        id_column: str = "id",
+        time_column: str = "time",
+        feature_columns: List[str] = None,
         add_ts_meta: bool = False,
-        multivariate_join: str = 'inner'
+        multivariate_join: str = "inner",
+        imputation_method: Literal["knn", "iterative", "miceforest"] = "knn",
+        imputation_kwargs: dict | None = None,
+        cross_standardisation: bool = True,
+        verbose: bool = False,
     ):
         """
         Initialize the CrossSectionalClustering class.
@@ -98,7 +107,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             smoothing_type (Literal["gaussian_kernel", "rolling_mean"], optional): The type of smoothing to apply. Defaults to "gaussian_kernel".
             smoothing_window_size (int, optional): The window size for smoothing. Defaults to 10.
             interpolation (bool, optional): Whether to interpolate the time series. Defaults to False.
-            interpolation_resolution (int, optional): The resolution for interpolation. Defaults to 30.
+            interpolation_resolution (int, optional): The resolution for interpolation. Defaults to 1
+            analysis_resolution (int): The resolution used to perform the feature aggregations. Defaults to 30
             min_measurements_per_id (int, optional): The minimum number of measurements per time series. Defaults to 10.
             min_time (int, optional): The minimum time for time series. Defaults to None.
             max_time (int, optional): The maximum time for time series. Defaults to None.
@@ -111,21 +121,45 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             time_column (str): The column to use for time information.
             feature_columns (List[str]): The columns to use for feature extraction.
             add_ts_meta: bool = False: Whether to add time series metadata to the output. Defaults to False.
-            multivariate_join: str='inner' : How to join the cross-sectional results over the variables
+            multivariate_join: str='inner' : How to join the cross-sectional results over the variables,
+            imputation_method: What imputation method to use before the clustering
+            imputation_kwargs: Dict of keyword arguments to pass to the imputation method.
+                For 'knn': n_neighbors, weights, metric, etc. (default: n_neighbors=20)
+                For 'iterative': max_iter, estimator, n_nearest_features, etc. (default: max_iter=10)
+                For 'miceforest': save_all_iterations, random_state, num_datasets for ImputationKernel,
+                    mice_iterations (default: 10), n_estimators (default: 50) for mice() method
+                For SimpleImputer methods ('mean', 'median', etc.): missing_values, copy, etc.
+                Examples:
+                    - KNN: {'n_neighbors': 10, 'weights': 'distance'}
+                    - Iterative: {'max_iter': 20, 'estimator': RandomForestRegressor()}
+                    - MiceForest: {'random_state': 42, 'mice_iterations': 15, 'n_estimators': 100}
+                    - SimpleImputer: {'missing_values': -999, 'copy': False}
+            cross_standardisation: what standardisation method to use
+            verbose: bool = False: Whether to print progress information. Defaults to False.
         """
 
+        assert analysis_resolution % interpolation_resolution == 0, (
+            "Analysis resolution must be a multiple of the interpolation resolution"
+        )
         # TODO: make compatible with multiple features
+
+        start_time = time.perf_counter()
 
         extractors = [e.lower() for e in extractors]
 
-        assert(max_time<= min_time), "Max time has to be equal or smaller than min time"
+        if max_time is not None and min_time is not None:
+            assert max_time >= min_time, (
+                "Max time has to be equal or greater than min time"
+            )
 
         self.smoothing = smoothing
         self.smoothing_type = smoothing_type
         self.smoothing_window_size = smoothing_window_size
+        self.n_skip = n_skip
         self.interpolation = interpolation
         self.interpolation_resolution = interpolation_resolution
         self.interpolation_keep_init = interpolation_keep_init
+        self.analysis_resolution = analysis_resolution
         self.min_measurements_per_id = min_measurements_per_id
         self.min_time = min_time
         self.max_time = max_time
@@ -136,29 +170,81 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.normalisation_method = normalisation_method
         self.id_column = id_column
         self.time_column = time_column
-        self.feature_columns = feature_columns
+        self.feature_columns = feature_columns or []
+        self.val_cols = self.feature_columns
         self.add_ts_meta = add_ts_meta
         self.multivariate_join = multivariate_join
+        self.imputation_kwargs = imputation_kwargs or {}
+        self.cross_standardisation = cross_standardisation
 
         if clustering_algorithm == "gmm":
-            self.clustering_algorithm = GaussianMixture(n_components=n_clusters, random_state=random_state)
+            self.clustering_algorithm = GaussianMixture(
+                n_components=n_clusters, random_state=random_state
+            )
         elif clustering_algorithm == "bgmm":
-            self.clustering_algorithm = BayesianGaussianMixture(n_components=n_clusters, random_state=random_state)
+            self.clustering_algorithm = BayesianGaussianMixture(
+                n_components=n_clusters, random_state=random_state
+            )
         else:
             raise ValueError("Invalid clustering algorithm")
 
+        # Set up imputer with custom kwargs
+        if imputation_method == "knn":
+            knn_kwargs = {"n_neighbors": 20}
+            knn_kwargs.update(self.imputation_kwargs)
+            self.imputer = KNNImputer(**knn_kwargs)
+        elif imputation_method == "iterative":
+            iterative_kwargs = {
+                "max_iter": 10,
+                "random_state": random_state,
+                "verbose": verbose,
+            }
+            iterative_kwargs.update(self.imputation_kwargs)
+            self.imputer = IterativeImputer(**iterative_kwargs)
+        elif imputation_method == "miceforest":
+            self.imputer = "mice"  # placeholder for miceforest
+        elif imputation_method == "mean":
+            simple_kwargs = {"strategy": "mean"}
+            simple_kwargs.update(self.imputation_kwargs)
+            self.imputer = SimpleImputer(**simple_kwargs)
+        elif imputation_method == "median":
+            simple_kwargs = {"strategy": "median"}
+            simple_kwargs.update(self.imputation_kwargs)
+            self.imputer = SimpleImputer(**simple_kwargs)
+        elif imputation_method == "most_frequent":
+            simple_kwargs = {"strategy": "most_frequent"}
+            simple_kwargs.update(self.imputation_kwargs)
+            self.imputer = SimpleImputer(**simple_kwargs)
+        elif imputation_method == "constant":
+            simple_kwargs = {"strategy": "constant", "fill_value": 0}
+            simple_kwargs.update(self.imputation_kwargs)
+            self.imputer = SimpleImputer(**simple_kwargs)
+        else:
+            raise ValueError("Invalid imputation method")
+
         self.extractors = {
-            'custom_features': 'custom' in extractors,
-            'tsfel_features': 'tsfel' in extractors,
-            'catch22_features': 'catch22' in extractors,
-            'tsfresh_features': 'tsfresh' in extractors,
-            'cesium_features': 'cesium' in extractors,
-            'antropy_features': 'antropy' in extractors,
-            'nolds_features': 'nolds' in extractors,
-            'katz_features': 'katz' in extractors,
+            "custom_features": "custom" in extractors,
+            "tsfel_features": "tsfel" in extractors,
+            "catch22_features": "catch22" in extractors,
+            "tsfresh_features": "tsfresh" in extractors,
+            "cesium_features": "cesium" in extractors,
+            "antropy_features": "antropy" in extractors,
+            "nolds_features": "nolds" in extractors,
+            "katz_features": "katz" in extractors,
         }
 
-    def fit(self, tsdf: DataFrame, y = None):
+        self.verbose = verbose
+
+        if self.verbose:
+            if self.imputation_kwargs:
+                logger.info(f"Using imputation method: {imputation_method}")
+                logger.info(f"Imputation kwargs: {self.imputation_kwargs}")
+            logger.debug("CrossSectionalClustering initialized")
+
+    def fit(self, tsdf: DataFrame, y=None):
+        fit_start_time = time.perf_counter()
+        logger.info(f"Starting CrossSectionalClustering.fit(); TS shape {tsdf.shape}")
+
         id_kwargs = {
             "id_col": self.id_column,
             "time_col": self.time_column,
@@ -171,69 +257,355 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         # TODO: (OPTION) for cross-channel features combine into combi-channel, before cross-sect extraction
 
         for var_num, _feature_column in enumerate(self.val_cols):
-            _feature_column = self.val_cols[0]
-            id_kwargs['val_col'] = _feature_column
-            ts = tsdf[*id_kwargs.values()]
-            ts = preprocessing.get_filtered_df(ts, min_time=self.min_time, min_measurements=self.min_measurements_per_id, **id_kwargs.pop(key="val_col"))
+            print(_feature_column, flush=True)
+            step_start_time = time.perf_counter()
+            logger.info(f"Processing feature column: {_feature_column}")
+
+            id_kwargs["val_col"] = _feature_column
+            ts = tsdf[[self.id_column, self.time_column, _feature_column]]
+
+            # Filtering step
+            filter_start = time.perf_counter()
+            ts = preprocessing.get_filtered_df(
+                ts,
+                min_time=self.min_time,
+                min_measurements=self.min_measurements_per_id,
+                **{k: v for k, v in id_kwargs.items() if k != "val_col"},
+            )
+            filter_time = time.perf_counter() - filter_start
+            if self.verbose:
+                self.ts_filtered = ts
+                logger.info(
+                    f"Filtering completed for {_feature_column} in {filter_time:.4f} seconds. TS: {ts.shape}"
+                )
 
             # get meta data
             if self.add_ts_meta:
+                meta_start = time.perf_counter()
                 # per id extract number of measurements, max_time, time_per_measurement, time_var
                 #
                 ts_meta = {
-                    'NumMeas': ts.groupby(self.id_column).size(),
-                    'MaxTime': ts.groupby(self.id_column)[self.time_column].max(),
-                    'MeanTimeDiff': ts.groupby(self.id_column)[self.time_column].diff().mean(),
-                    'RelTimeDiffVar': ts.groupby(self.id_column)[self.time_column].diff().std() / ts.groupby(self.id_column)[self.time_column].diff().mean(),
-                    'TimeStdev': ts.groupby(self.id_column)[self.time_column].std()
+                    "NumMeas": ts.groupby(self.id_column).size(),
+                    "MaxTime": ts.groupby(self.id_column)[self.time_column].max(),
+                    "MeanTimeDiff": ts.groupby(self.id_column)[self.time_column]
+                    .diff()
+                    .mean(),
+                    "RelTimeDiffVar": ts.groupby(self.id_column)[self.time_column]
+                    .diff()
+                    .std()
+                    / ts.groupby(self.id_column)[self.time_column].diff().mean(),
+                    "TimeStdev": ts.groupby(self.id_column)[self.time_column].std(),
+                    "MeanVal": ts.groupby(self.id_column)[self.value_column].mean(),
+                    "StdVal": ts.groupby(self.id_column)[self.value_column].std(),
+                    "SkewVal": ts.groupby(self.id_column)[self.value_column].skew(),
+                    "Q91": ts.groupby(self.id_column)[self.value_column].quantile(0.91),
+                    "Q95": ts.groupby(self.id_column)[self.value_column].quantile(0.95),
+                    "Q99": ts.groupby(self.id_column)[self.value_column].quantile(0.99),
+                    "Q50": ts.groupby(self.id_column)[self.value_column].quantile(0.50),
+                    "Q01": ts.groupby(self.id_column)[self.value_column].quantile(0.01),
+                    "Q05": ts.groupby(self.id_column)[self.value_column].quantile(0.05),
+                    "Q09": ts.groupby(self.id_column)[self.value_column].quantile(0.10),
                 }
-
+                meta_time = time.perf_counter() - meta_start
+                if self.verbose:
+                    logger.info(
+                        f"Meta data extraction completed for {_feature_column} in {meta_time:.4f} seconds"
+                    )
 
             if self.interpolation:
-                ts = preprocessing.get_interpolated(ts,
+                interp_start = time.perf_counter()
+                ts = preprocessing.get_interpolated(
+                    ts,
                     time_res=self.interpolation_resolution,
                     max_time=self.max_time,
                     keep_t0_value=self.interpolation_keep_init,
-                    time_before=self.time_before,
                     df_out=True,
-                    **id_kwargs)
+                    **id_kwargs,
+                )
+                interp_time = time.perf_counter() - interp_start
+                if self.verbose:
+                    self.ts_interpolated = ts
+                    logger.info(
+                        f"Interpolation completed for {_feature_column} in {interp_time:.4f} seconds, TS: {ts.shape}"
+                    )
 
             if self.smoothing:
-                if self.smoothing_type == 'gaussian_kernel':
-                    ts = preprocessing.get_smoothed_gaussian_kernel(ts, window=self.smoothing_window_size, Nskip=3, df_out=True, **id_kwargs)
-                elif self.smoothing_type == 'savgol':
-                    ts = preprocessing.get_smoothed_savgol(ts, window=self.smoothing_window_size, polyorder=self.smoothing_polyorder, df_out=True, **id_kwargs)
-                elif self.smoothing_type == 'rolling_mean':
-                    ts = preprocessing.get_smoothed_rolling_mean(ts, window=self.smoothing_window_size, df_out=True, **id_kwargs)
+                # TODO: refactor wrap into one function..
+                smooth_start = time.perf_counter()
+                if self.smoothing_type == "gaussian_kernel":
+                    ts = preprocessing.get_smoothed_gaussian_kernel(
+                        ts,
+                        window=self.smoothing_window_size,
+                        Nskip=self.n_skip,
+                        df_out=True,
+                        **id_kwargs,
+                    )
+                elif self.smoothing_type == "gaussian_kernel_simple":
+                    ts = preprocessing.get_smoothed_gaussian_kernel_simple(
+                        ts,
+                        window=self.smoothing_window_size,
+                        Nskip=self.n_skip,
+                        df_out=True,
+                        **id_kwargs,
+                    )
+                elif self.smoothing_type == "box_kernel":
+                    ts = preprocessing.get_smoothed_box_kernel(
+                        ts,
+                        window=self.smoothing_window_size,
+                        Nskip=self.n_skip,
+                        df_out=True,
+                        **id_kwargs,
+                    )
+                elif self.smoothing_type == "rolling_mean":
+                    ts = preprocessing.get_smoothed_rolling_mean(
+                        ts,
+                        window=self.smoothing_window_size,
+                        Nskip=self.n_skip,
+                        df_out=True,
+                        **id_kwargs,
+                    )
                 else:
                     raise ValueError("Invalid smoothing type")
+                smooth_time = time.perf_counter() - smooth_start
+                if self.verbose:
+                    self.ts_smoothed = ts
+                    logger.info(
+                        f"Smoothing completed for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
+                    )
+
+            if self.analysis_resolution != self.interpolation_resolution:
+                # We need to keep only every self.analysis_resolution/self.interpolation_resolution values, per ID
+                ts = ts.groupby("ID").apply(
+                    lambda x: x.iloc[
+                        :: self.analysis_resolution // self.interpolation_resolution
+                    ]
+                )
+                if self.verbose:
+                    self.ts_smoothed_filtered = ts
+                    logger.info(
+                        f"Selection after smoothing for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
+                    )
+
+            # prune all NaNs values
+            ts = ts.dropna(subset=[_feature_column])
+            if self.verbose:
+                self.ts_smoothed_filtered = ts
+                logger.info(
+                    f"Selection after pruning NaNs for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
+                )
 
             if self.normalise_timeseries:
-                ts = preprocessing.normalise_ts(ts, scaler=self.normalisation_method, df_out=True, id_kwargs**)
+                norm_start = time.perf_counter()
+                print(ts.head())
+                ts = preprocessing.normalise_ts(
+                    ts, scaler=self.normalisation_method, df_out=True, **id_kwargs
+                )
+                norm_time = time.perf_counter() - norm_start
+                if self.verbose:
+                    self.ts_normalized = ts
+                    logger.info(
+                        f"Normalization completed for {_feature_column} in {norm_time:.4f} seconds, TS: {ts.shape}"
+                    )
 
             # extract cross sectional
-            ts_cross, durations = extractor.get_crossectional(tsdf, **extractors, **id_cols)
+            extract_start = time.perf_counter()
+            ts_cross, durations = extractor.get_crossectional(
+                ts, **self.extractors, **id_kwargs
+            )
+            extract_time = time.perf_counter() - extract_start
+            if self.verbose:
+                self.ts_cross = ts_cross
+                logger.info(
+                    f"Cross-sectional extraction completed for {_feature_column} in {extract_time:.4f} seconds, TS cross: {ts_cross.shape}"
+                )
 
             if self.add_ts_meta:
+                meta_add_start = time.perf_counter()
+                logger.info(f"--- ts shape --- : {ts_cross.shape}")
                 for k, v in ts_meta.items():
+                    v = DataFrame(v).reset_index()
                     v = v.set_index(self.id_column)
-                    v.columns = [f'Meta_{k}']
-                    ts_cross = ts_cross.join(v, how='inner')
+                    v.columns = [f"Meta_{k}"]
+                    ts_cross = ts_cross.join(v, how="inner")
+                    # print(f"--- ts shape --- : {ts_cross.shape}, + {k}")
+                meta_add_time = time.perf_counter() - meta_add_start
+                if self.verbose:
+                    self.ts_cross = ts_cross
+                    logger.info(
+                        f"Adding meta features completed for {_feature_column} in {extract_time:.4f} seconds"
+                    )
 
             # add _feature_column as prefix
             #
             ts_cross.columns = [f"{_feature_column}_{c}" for c in ts_cross.columns]
 
-            if var_num==0:
+            if var_num == 0:
                 ts_cross_combined = ts_cross
-            if var_num>0:
-                ts_cross_combined = ts_cross_combined.join(ts_cross, how=self.multivariate_join)
+            if var_num > 0:
+                ts_cross_combined = ts_cross_combined.join(
+                    ts_cross, how=self.multivariate_join
+                )
+
+            step_time = time.perf_counter() - step_start_time
+            if self.verbose:
+                self.ts_cross_combined = ts_cross_combined
+                logger.info(
+                    f"Joining completed for {_feature_column} in {extract_time:.4f} seconds"
+                )
 
         # TODO: (OPTION) for cross-channel features combine cross-sect features a posteriori
         #
 
-        self.clustering_algorithm.fit(ts_cross)
-        self.durations = durations
+        # StandardScaling
+        #
+        if self.cross_standardisation:
+            scale_start = time.perf_counter()
+            ts_cross_combined = DataFrame(
+                StandardScaler().fit_transform(ts_cross_combined),
+                index=ts_cross_combined.index,
+                columns=ts_cross_combined.columns,
+            )
+            scale_time = time.perf_counter() - scale_start
+            if self.verbose:
+                self.ts_cross_combined = ts_cross_combined
+                logger.info(f"Standardization completed in {scale_time:.4f} seconds")
 
-    def predict(self, ts: DataFrame):
-        return self.clustering_algorithm.predict(ts)
+        # Imputation
+        #
+        if ts_cross_combined.isna().sum().sum() > 0:
+            impute_start = time.perf_counter()
+            missing_count = ts_cross_combined.isna().sum().sum()
+            logger.info(f"Found {missing_count} missing values, starting imputation")
+            if self.imputer == "mice":
+                # Default miceforest kwargs
+                mice_kwargs = {
+                    "save_all_iterations": True,
+                    "random_state": 100,
+                    "num_datasets": 1,
+                }
+                mice_kwargs.update(self.imputation_kwargs)
+
+                imp_kernel = mf.ImputationKernel(ts_cross_combined, **mice_kwargs)
+
+                # Mice iteration kwargs
+                mice_iter_kwargs = {"n_estimators": 50}
+                if "mice_iterations" in self.imputation_kwargs:
+                    mice_iterations = self.imputation_kwargs.pop("mice_iterations")
+                else:
+                    mice_iterations = 10
+                if "n_estimators" in self.imputation_kwargs:
+                    mice_iter_kwargs["n_estimators"] = self.imputation_kwargs[
+                        "n_estimators"
+                    ]
+
+                logger.info(
+                    f"Running miceforest with {mice_iterations} iterations and kwargs: {mice_iter_kwargs}"
+                )
+                imp_kernel.mice(mice_iterations, **mice_iter_kwargs)
+                ts_cross_combined = imp_kernel.complete_data()
+            else:
+                logger.info(f"Running {type(self.imputer).__name__} imputation")
+                ts_cross_combined = DataFrame(
+                    self.imputer.fit_transform(ts_cross_combined),
+                    index=ts_cross_combined.index,
+                    columns=ts_cross_combined.columns,
+                )
+            impute_time = time.perf_counter() - impute_start
+            if self.verbose:
+                self.ts_cross_combined = ts_cross_combined
+                logger.info(f"Imputation completed in {impute_time:.4f} seconds")
+        else:
+            logger.debug(f"No missing values in cross-sectional data")
+
+        # Clustering
+        #
+        cluster_start = time.perf_counter()
+        self.clustering_algorithm.fit(ts_cross_combined)
+        cluster_time = time.perf_counter() - cluster_start
+        logger.info(f"Clustering completed in {cluster_time:.4f} seconds")
+
+        self.ts_cross_combined = ts_cross_combined
+
+        self.durations = durations
+        if self.verbose:
+            logger.debug(f"Clustering completed")
+
+        fit_total_time = time.perf_counter() - fit_start_time
+        logger.info(
+            f"CrossSectionalClustering.fit() completed in {fit_total_time:.4f} seconds"
+        )
+
+        return self
+
+    def predict(self, X=None):
+        return self.clustering_algorithm.predict(self.ts_cross_combined)
+
+    def get_scores(self):
+        # Davies-Bouldin
+        # Calinski-Harabasz
+        # Silhouette
+        # mean entropy over class probabilities (if there are probas) (we call this MEP)
+        # mean max proba over class probabilities (we call this MMP)
+        # AIC and BIC if available
+        #
+
+        # assert that clustering_algorithm is fitted
+        assert self.clustering_algorithm.is_fitted(), (
+            "Clustering algorithm is not fitted"
+        )
+
+        score_dict = {}
+        cluster_labels = self.clustering_algorithm.predict(self.ts_cross_combined)
+        # Davies-Bouldin
+        score_dict["davies_bouldin"] = self.clustering_algorithm.davies_bouldin_score(
+            self.ts_cross_combined, cluster_labels
+        )
+        # Calinski-Harabasz
+        score_dict["calinski_harabasz"] = (
+            self.clustering_algorithm.calinski_harabasz_score(
+                self.ts_cross_combined, cluster_labels
+            )
+        )
+        # Silhouette
+        score_dict["silhouette"] = self.clustering_algorithm.silhouette_score(
+            self.ts_cross_combined, cluster_labels
+        )
+
+        # add AIC and BIC if available
+        if hasattr(self.clustering_algorithm, "aic"):
+            score_dict["aic"] = self.clustering_algorithm.aic(self.ts_cross_combined)
+        else:
+            score_dict["aic"] = None
+        if hasattr(self.clustering_algorithm, "bic"):
+            score_dict["bic"] = self.clustering_algorithm.bic(self.ts_cross_combined)
+        else:
+            score_dict["bic"] = None
+
+        # if self.clustering_algorithm has predict_proba, extract the MEP and MPP
+        if hasattr(self.clustering_algorithm, "predict_proba"):
+            probas = self.clustering_algorithm.predict_proba(self.ts_cross_combined)
+            score_dict["mep"] = np.mean(-np.sum(probas * np.log(probas), axis=1))
+            score_dict["mpp"] = np.mean(np.max(probas, axis=1))
+        return result
+
+    def viz(self):
+        # use Umap to visualize the clusters
+        umap = UMAP(n_components=2)
+        embedding = umap.fit_transform(self.ts_cross_combined)
+        cluster_labels = self.clustering_algorithm.predict(self.ts_cross_combined)
+
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(
+            embedding[:, 0],
+            embedding[:, 1],
+            c=cluster_labels,
+            cmap="viridis",
+            alpha=0.5,
+        )
+        plt.colorbar(scatter)
+        plt.title("UMAP Visualization of Clusters")
+        plt.xlabel("UMAP Component 1")
+        plt.ylabel("UMAP Component 2")
+        plt.show()

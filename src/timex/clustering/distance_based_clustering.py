@@ -1,3 +1,0 @@
-# partitional
-# hierarchical
-# density-based
