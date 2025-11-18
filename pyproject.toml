@@ -40,6 +40,10 @@ torch = [
     { version = "^2.2.2+cu121", source = "pytorch", markers = "sys_platform == 'win32' or sys_platform == 'linux'" },
     { version = "^2.2.2", markers = "sys_platform != 'win32' and sys_platform != 'linux'" },
 ]
+torchaudio = [
+    { version = "^2.2.2+cu121", source = "pytorch", markers = "sys_platform == 'win32' or sys_platform == 'linux'" },
+    { version = "^2.2.2", markers = "sys_platform != 'win32' and sys_platform != 'linux'" },
+]
 pywavelet = "^0.2.7"
 pyarrow = "^19.0.1"
 tsfeatures = "^0.4.5"
@@ -62,6 +66,7 @@ fabba = "^1.3.1"
 accelerate = "^1.10.1"
 miceforest = "^6.0.5"
 ipykernel = "^7.1.0"
+aeon = "^1.3.0"
 
 [build-system]
 requires = ["poetry-core"]
