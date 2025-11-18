@@ -396,7 +396,6 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
 
             if self.normalise_timeseries:
                 norm_start = time.perf_counter()
-                print(ts.head())
                 ts = preprocessing.normalise_ts(
                     ts, scaler=self.normalisation_method, df_out=True, **id_kwargs
                 )

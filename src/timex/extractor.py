@@ -368,15 +368,15 @@ class Extractor:
             cumuvalues, time_cumuvalues = time_function(cumuvals)(ts_data)
 
             fourcoeffsPolar, time_fourcoeffs = time_function(extract_fft_features)(
-                ts_data, num_features=10, max_frequency=50
+                ts_data, num_features=5, max_frequency=100
             )
             fourcoeffsCart, time_fourcoeffs_cart = time_function(FourierCoefficients)(
-                ts_data, number_of_components=25
+                ts_data, number_of_components=15
             )
 
             wavelet_coeffs, time_wavelet_coeffs = time_function(
                 wavelets.extract_wavelet_features
-            )(ts_data, level=3, num_features=5)
+            )(ts_data, level=2, num_features=5, dict_out=True)
 
             peak_and_valleys, time_peak_and_val = time_function(
                 extract_peaks_and_valleys
@@ -1004,7 +1004,7 @@ def psd_int(
     return pd.DataFrame(res)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_spectral_entropy(x: np.ndarray, freq: int = 1) -> float:
     """
     source: https://github.com/facebookresearch/Kats/blob/main/kats/tsfeatures/tsfeatures.py
@@ -1029,7 +1029,7 @@ def get_spectral_entropy(x: np.ndarray, freq: int = 1) -> float:
     return -(entropy / np.log2(psd_norm.size))
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_relative_entropy(x: np.ndarray) -> float:
     """
     source: entropy of continuous values relative to maximum entropy
@@ -1086,7 +1086,7 @@ def get_stability(x: np.ndarray, window_size: int = 8) -> float:
     return np.var(v)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
     """
     Getting: Hurst Exponent wiki: https://en.wikipedia.org/wiki/Hurst_exponent
@@ -1110,7 +1110,7 @@ def get_hurst(x: np.ndarray, lag_size: int = 30) -> float:
     return poly[0] if not np.isnan(poly[0]) else 0
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
     """
     Get the sum of the number of times the slope of the time series changes sign.
@@ -1122,7 +1122,7 @@ def get_slope_sign_switch_sum(ts_data: np.ndarray) -> float:
     return np.sum(np.diff(np.sign(np.diff(ts_data))) != 0) / len(ts_data)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_linearity(x: np.ndarray) -> float:
     """
     Compute linearity feature: R square from a fitted linear regression.
@@ -1292,7 +1292,7 @@ def extract_cwt_features(
     return np.array(features)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_het_arch(x: np.ndarray) -> float:
     """
     Compute Engle's test for autogregressive Conditional Heteroscedasticity (ARCH).
@@ -1310,7 +1310,7 @@ def get_het_arch(x: np.ndarray) -> float:
     return het_arch(x, nlags=min(10, len(x) // 5))[0]
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_stl_features(
     x: np.ndarray,
     period: int = 3,
@@ -1600,7 +1600,7 @@ def _yule_walker_determinant(x_list: List[float]) -> float:
     return np.linalg.det(R)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
     """
     Getting flat spots: Maximum run-lengths across equally-sized segments of time series
@@ -1630,99 +1630,98 @@ def get_flat_spots(x: np.ndarray, nbins: int = 10) -> int:
     return max_run_length
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def avg_3rd_order(x: np.ndarray) -> float:
     """
     Requires a minimum of 4 points
     """
-    assert x.shape[0] > 4, (
-        "We would like a minimum of 5 points for averaging the 2nd diff"
-    )
+    if x.shape[0] <= 4:
+        return np.nan
+
     xd3 = np.diff(x, n=3)
     return np.nanmean(xd3)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def avg_2nd_order(x: np.ndarray) -> float:
     """
     Requires a minimum of 4 points
     """
-    assert x.shape[0] > 3, (
-        "We would like a minimum of 4 points for averaging the 2nd diff"
-    )
+    if x.shape[0] <= 3:
+        return np.nan
     xd2 = np.diff(x, n=2)
     return np.nanmean(xd2)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def avg_1st_order(x: np.ndarray) -> float:
     """
     Requires a minimum of 3 points
     """
-    assert x.shape[0] > 2, (
-        "We would like a minimum of 3 points for averaging the 1nd diff"
-    )
+    if x.shape[0] <= 2:
+        return np.nan
+
     xd1 = np.diff(x, n=1)
     return np.nanmean(xd1)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def diff_entropy_1st(x: np.ndarray) -> float:
-    assert x.shape[0] > 1, (
-        "We would like a minimum of 3 points for averaging the 1nd diff"
-    )
+    if x.shape[0] <= 1:
+        return np.nan
+
     xd1 = np.diff(x, n=1)
     return get_relative_entropy(xd1)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def diff_entropy_2nd(x: np.ndarray) -> float:
-    assert x.shape[0] > 2, (
-        "We would like a minimum of 3 points for averaging the 1nd diff"
-    )
+    if x.shape[0] <= 2:
+        return np.nan
+
     xd2 = np.diff(x, n=2)
     return get_relative_entropy(xd2)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def diff_entropy_3rd(x: np.ndarray) -> float:
-    assert x.shape[0] > 3, (
-        "We would like a minimum of 3 points for averaging the 1nd diff"
-    )
+    if x.shape[0] <= 3:
+        return np.nan
+
     xd3 = np.diff(x, n=3)
     return get_relative_entropy(xd3)
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def peak_over_mean(x: np.ndarray) -> float:
     max_v = x.max()
     mean_v = x.mean()
     return max_v / mean_v
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def peak_over_median(x: np.ndarray) -> float:
     max_v = x.max()
     median_v = np.median(x)
     return max_v / median_v
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def first_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[0]
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def second_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[1]
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def last_gradient(x: np.ndarray) -> float:
     return np.gradient(x)[-1]
 
 
-@jit(forceobj=True)
+# @jit(forceobj=True)
 def get_unitroot_kpss(x: np.ndarray) -> float:
     """
     Get the test statistic based on KPSS test.
@@ -2814,7 +2813,7 @@ def _create_symmetric_matrix(acf, order=11):
     return smatrix
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def _calc_cumfun(signal):
     """Computes the ECDF of the signal.
 
@@ -2958,7 +2957,7 @@ def FourierCoefficients(timeseries, number_of_components=25) -> Dict[str, float]
     return result
 
 
-@njit
+# @njit
 def DiffCollector(ts: np.ndarray, n: int = 3, k: int = 5):
     """
     Function to get n-regularly spaced kth order discrete differences
@@ -3081,39 +3080,45 @@ def extract_fft_features(
 
     # Ensure we have enough relevant frequencies
     if len(relevant_indices) == 0:
-        raise ValueError(f"No frequencies found between 0 and {max_frequency}Hz")
-
-    # Extract relevant frequency domain information
-    filtered_phases = np.angle(Y)[relevant_indices]
-    filtered_frequencies = frequencies[relevant_indices]
-    filtered_amplitudes = amplitudes[relevant_indices]
-
-    # Get indices of top frequency components
-    num_components = min(num_features, len(filtered_amplitudes))
-    top_indices = np.flip(np.argsort(filtered_amplitudes))[:num_components]
-
-    # Extract top components
-    top_amplitudes = filtered_amplitudes[top_indices]
-    top_frequencies = filtered_frequencies[top_indices]
-    top_phases = filtered_phases[top_indices]
-
-    # Pad with zeros if not enough components found
-    if num_components < num_features:
-        top_amplitudes = np.pad(top_amplitudes, (0, num_features - num_components))
-        top_frequencies = np.pad(top_frequencies, (0, num_features - num_components))
-        top_phases = np.pad(top_phases, (0, num_features - num_components))
-
-    # Build feature dictionary
-    all_features = (
-        top_amplitudes.tolist() + top_frequencies.tolist() + top_phases.tolist()
-    )
+        fail = True
+    else:
+        fail = False
 
     # Create dictionary keys
     feature_keys = (
-        [f"Amplitude {i}" for i in range(1, num_features + 1)]
-        + [f"Frequency {i}" for i in range(1, num_features + 1)]
-        + [f"Phase {i}" for i in range(1, num_features + 1)]
+        [f"Amplitude_{i}" for i in range(1, num_features + 1)]
+        + [f"Frequency_{i}" for i in range(1, num_features + 1)]
+        + [f"Phase_{i}" for i in range(1, num_features + 1)]
     )
+    if not fail:
+        # Extract relevant frequency domain information
+        filtered_phases = np.angle(Y)[relevant_indices]
+        filtered_frequencies = frequencies[relevant_indices]
+        filtered_amplitudes = amplitudes[relevant_indices]
+
+        # Get indices of top frequency components
+        num_components = min(num_features, len(filtered_amplitudes))
+        top_indices = np.flip(np.argsort(filtered_amplitudes))[:num_components]
+
+        # Extract top components
+        top_amplitudes = filtered_amplitudes[top_indices]
+        top_frequencies = filtered_frequencies[top_indices]
+        top_phases = filtered_phases[top_indices]
+
+        # Pad with zeros if not enough components found
+        if num_components < num_features:
+            top_amplitudes = np.pad(top_amplitudes, (0, num_features - num_components))
+            top_frequencies = np.pad(
+                top_frequencies, (0, num_features - num_components)
+            )
+            top_phases = np.pad(top_phases, (0, num_features - num_components))
+
+        # Build feature dictionary
+        all_features = (
+            top_amplitudes.tolist() + top_frequencies.tolist() + top_phases.tolist()
+        )
+    else:
+        all_features = [0] * num_features + [0] * num_features + [0] * num_features
 
     # Create and return the feature dictionary
     return dict(zip(feature_keys, all_features))

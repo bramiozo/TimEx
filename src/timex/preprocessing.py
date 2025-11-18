@@ -68,11 +68,7 @@ def get_filtered_df(
     maxts = ts_df.groupby(id_col)[time_col].max()
     ltids = maxts[maxts > min_time].index
 
-    cnts = (
-        ts_df[(ts_df[id_col].isin(ltids)) & (ts_df[time_col] < min_time)]
-        .groupby(id_col)
-        .size()
-    )
+    cnts = ts_df[ts_df[id_col].isin(ltids)].groupby(id_col).size()
     filtered_ids = cnts[cnts > min_measurements].index
 
     ts = ts_df.loc[ts_df[id_col].isin(filtered_ids)]
