@@ -2,29 +2,25 @@
 ## Pre-processing ##
 ####################
 
-from scipy import signal
-from scipy import interpolate
-from scipy import ndimage
+import gc
+import os
+import sys
+from collections import defaultdict
+from time import sleep
+from typing import Dict, List, Literal, Optional
+
 # from scipy.stats import skew, kurtosis
 # from scipy.fft import rfft, rfftfreq
 # from scipy.signal import cwt, ricker
-
 import numpy as np
-import tsfresh
-
-from tqdm import tqdm
-import sys, os
 import pandas as pd
-import gc
-from collections import defaultdict
-from time import sleep
-from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
-from sklego.meta.grouped_transformer import GroupedTransformer
+import tsfresh
+from scipy import interpolate, ndimage, signal
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-from typing import Optional, List, Dict, Literal
-
+from sklego.meta.grouped_transformer import GroupedTransformer
+from tqdm import tqdm
 from tslearn import metrics
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 
 
 def normalise_ts(
@@ -85,7 +81,7 @@ def get_interpolated(
     time_res: int = 7,
     keep_t0_value: bool = False,
     df_out: bool = False,
-):
+) -> pd.DataFrame | Dict[str, List]:
     """
     Extract interpolated time series data.
 
@@ -123,6 +119,38 @@ def get_interpolated(
         return pd.DataFrame.from_dict(res, orient="columns")
     else:
         return res
+
+
+def get_smoothed(
+    ts_df: pd.DataFrame,
+    id_col: str = "ID",
+    time_col: str = "Time_days",
+    val_col: str = "eGFR_CKDEpi2012",
+    window: int = 5,
+    Nskip: int = 3,
+    df_out: bool = False,
+    smoothing_method: Literal[
+        "gaussian_kernel", "gaussian_kernel_simple", "box_kernel", "rolling_mean"
+    ] = "gaussian_kernel",
+) -> pd.DataFrame | Dict[str, List]:
+    if smoothing_method == "gaussian_kernel":
+        return get_smoothed_gaussian_kernel(
+            ts_df, id_col, time_col, val_col, window, Nskip, df_out
+        )
+    elif smoothing_method == "gaussian_kernel_simple":
+        return get_smoothed_gaussian_kernel_simple(
+            ts_df, id_col, time_col, val_col, window, Nskip, df_out
+        )
+    elif smoothing_method == "box_kernel":
+        return get_smoothed_box_kernel(
+            ts_df, id_col, time_col, val_col, window, Nskip, df_out
+        )
+    elif smoothing_method == "rolling_mean":
+        return get_smoothed_rolling_mean(
+            ts_df, id_col, time_col, val_col, window, Nskip, df_out
+        )
+
+    return
 
 
 # TODO: ensure that first N-points are excluded from smoothing

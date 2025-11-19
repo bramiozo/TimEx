@@ -1,41 +1,36 @@
-from statistics import stdev
-from typing import List, Literal, Optional
+import logging
+import time
+
 # exposes clustering methods from tslearn, aeon, tscluster, deeptime, and pypots
 # [ ] tslearn
 # [ ] aeon
 # [ ] tscluster
 # [ ] deeptime
 # [ ] pypots
-
 from asyncio import SelectorEventLoop
+from statistics import stdev
 from tabnanny import verbose
-from timex import extractor
-from timex import preprocessing
+from typing import List, Literal, Optional
 
+import miceforest as mf
+from numpy import inf, isnan, nan, ndarray
 from pandas import DataFrame
-from numpy import ndarray
-
-from tslearn import clustering as tslearn_clustering
-
-from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
+from scipy.stats import entropy
 from sklearn.base import BaseEstimator, ClusterMixin
-
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer, KNNImputer, SimpleImputer
-from sklearn.preprocessing import StandardScaler
-import miceforest as mf
-
 from sklearn.metrics import (
-    davies_bouldin_score,
     calinski_harabasz_score,
+    davies_bouldin_score,
     silhouette_score,
 )
-from scipy.stats import entropy
-
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
+from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
+from tslearn import clustering as tslearn_clustering
 from umap import UMAP
 
-import time
-import logging
+from timex import extractor, preprocessing
 
 # adding logger
 #
@@ -93,6 +88,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         imputation_method: Literal["knn", "iterative", "miceforest"] = "knn",
         imputation_kwargs: dict | None = None,
         cross_standardisation: bool = True,
+        max_cross_missingness: float = 0.75,
         verbose: bool = False,
     ):
         """
@@ -136,6 +132,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     - SimpleImputer: {'missing_values': -999, 'copy': False}
             cross_standardisation: what standardisation method to use
             verbose: bool = False: Whether to print progress information. Defaults to False.
+            max_cross_missingness: float = 0.5: Maximum allowed missingness in cross-validation data.
         """
 
         assert analysis_resolution % interpolation_resolution == 0, (
@@ -176,6 +173,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.multivariate_join = multivariate_join
         self.imputation_kwargs = imputation_kwargs or {}
         self.cross_standardisation = cross_standardisation
+        self.max_cross_missingness = max_cross_missingness
 
         if clustering_algorithm == "gmm":
             self.clustering_algorithm = GaussianMixture(
@@ -332,36 +330,18 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             if self.smoothing:
                 # TODO: refactor wrap into one function..
                 smooth_start = time.perf_counter()
-                if self.smoothing_type == "gaussian_kernel":
-                    ts = preprocessing.get_smoothed_gaussian_kernel(
-                        ts,
+                if self.smoothing_type in [
+                    "gaussian_kernel",
+                    "gaussian_kernel_simple",
+                    "rolling_mean",
+                    "box_kernel",
+                ]:
+                    ts = preprocessing.get_smoothed(
+                        ts_df=ts,
                         window=self.smoothing_window_size,
                         Nskip=self.n_skip,
                         df_out=True,
-                        **id_kwargs,
-                    )
-                elif self.smoothing_type == "gaussian_kernel_simple":
-                    ts = preprocessing.get_smoothed_gaussian_kernel_simple(
-                        ts,
-                        window=self.smoothing_window_size,
-                        Nskip=self.n_skip,
-                        df_out=True,
-                        **id_kwargs,
-                    )
-                elif self.smoothing_type == "box_kernel":
-                    ts = preprocessing.get_smoothed_box_kernel(
-                        ts,
-                        window=self.smoothing_window_size,
-                        Nskip=self.n_skip,
-                        df_out=True,
-                        **id_kwargs,
-                    )
-                elif self.smoothing_type == "rolling_mean":
-                    ts = preprocessing.get_smoothed_rolling_mean(
-                        ts,
-                        window=self.smoothing_window_size,
-                        Nskip=self.n_skip,
-                        df_out=True,
+                        smoothing_method=self.smoothing_type,
                         **id_kwargs,
                     )
                 else:
@@ -375,7 +355,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
 
             if self.analysis_resolution != self.interpolation_resolution:
                 # We need to keep only every self.analysis_resolution/self.interpolation_resolution values, per ID
-                ts = ts.groupby("ID").apply(
+                ts = ts.groupby(self.id_column).apply(
                     lambda x: x.iloc[
                         :: self.analysis_resolution // self.interpolation_resolution
                     ]
@@ -431,7 +411,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 if self.verbose:
                     self.ts_cross = ts_cross
                     logger.info(
-                        f"Adding meta features completed for {_feature_column} in {extract_time:.4f} seconds"
+                        f"Adding meta features completed for {_feature_column} in {meta_add_time:.4f} seconds"
                     )
 
             # add _feature_column as prefix
@@ -451,6 +431,53 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 logger.info(
                     f"Joining completed for {_feature_column} in {extract_time:.4f} seconds"
                 )
+
+        # Replace all inf's and -inf's by NaN's
+        #
+        replace_start = time.perf_counter()
+        ts_cross_combined = ts_cross_combined.replace([inf, -inf], nan)
+        if self.verbose:
+            replace_time = time.perf_counter() - replace_start
+            logger.info(f"Replaced inf's by NaN's in {replace_time:.4f} seconds")
+
+        # Remove columns with >P% missingness
+        #
+        remove_start = time.perf_counter()
+        num_cols = ts_cross_combined.shape[1]
+        ts_cross_combined = ts_cross_combined.dropna(
+            axis=1, thresh=int(ts_cross_combined.shape[0] * self.max_cross_missingness)
+        )
+        if self.verbose:
+            remove_time = time.perf_counter() - remove_start
+            logger.info(
+                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with more than {self.max_cross_missingness * 100}% missingness in {remove_time:.4f} seconds"
+            )
+
+        # Remove columns with zero variance
+        #
+        remove_start = time.perf_counter()
+        num_cols = ts_cross_combined.shape[1]
+        ts_cross_combined = ts_cross_combined.loc[:, ts_cross_combined.var() > 0]
+        if self.verbose:
+            remove_time = time.perf_counter() - remove_start
+            logger.info(
+                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with zero variance {remove_time:.4f} seconds"
+            )
+
+        # Remove perfectly correlated features
+        #
+        cols = ts_cross_combined.columns
+        droplist = []
+        keeplist = []
+        duplicated = set()
+        for i, cl in tqdm(enumerate(cols)):
+            for cr in cols[i + 1 :]:
+                if ts_cross_combined[cl].equals(ts_cross_combined[cr]):
+                    keeplist.append(cl)
+                    droplist.append(cr)
+                    duplicated.add((cl, cr))
+        to_drop = list(set(droplist).difference(set(keeplist)))
+        ts_cross_combined = ts_cross_combined.drop(columns=to_drop)
 
         # TODO: (OPTION) for cross-channel features combine cross-sect features a posteriori
         #
