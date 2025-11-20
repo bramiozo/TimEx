@@ -8,11 +8,13 @@ import time
 # [ ] deeptime
 # [ ] pypots
 from asyncio import SelectorEventLoop
-from statistics import stdev
-from tabnanny import verbose
-from typing import List, Literal, Optional
+
+# from statistics import stdev
+# from tabnanny import verbose
+from typing import Any, List, Literal, Optional
 
 import miceforest as mf
+import numpy as np
 from numpy import inf, isnan, nan, ndarray
 from pandas import DataFrame
 from scipy.stats import entropy
@@ -34,14 +36,18 @@ from timex import extractor, preprocessing
 
 # adding logger
 #
-logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.DEBUG,  # or logging.DEBUG for more verbose output
+    level=logging.INFO,  # or logging.DEBUG for more verbose output
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler()  # This will output to the notebook cell
     ],
 )
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+# Suppress verbose libraries
+logging.getLogger("umap").setLevel(logging.WARNING)
+logging.getLogger("numba").setLevel(logging.WARNING)
 
 
 class CrossSectionalClustering(BaseEstimator, ClusterMixin):
@@ -62,7 +68,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         min_time: Optional[int] = None,
         max_time: Optional[int] = None,
         n_clusters: int = 3,
-        random_state: int = None,
+        random_state: int = 42,
         extractors: List[
             Literal[
                 "custom",
@@ -78,6 +84,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         clustering_algorithm: Literal[
             "gmm", "bgmm", "kmeans", "optics", "hdbscan", "spectral", "hierarchical"
         ] = "gmm",
+        cluster_kwargs: dict[str, Any] | None = None,
         normalise_timeseries: Optional[Literal["bulk", "group"]] = "group",
         normalisation_method: Optional[Literal["standard", "minmax"]] = "standard",
         id_column: str = "id",
@@ -86,7 +93,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         add_ts_meta: bool = False,
         multivariate_join: str = "inner",
         imputation_method: Literal["knn", "iterative", "miceforest"] = "knn",
-        imputation_kwargs: dict | None = None,
+        imputation_kwargs: dict[str, Any] | None = None,
         cross_standardisation: bool = True,
         max_cross_missingness: float = 0.75,
         verbose: bool = False,
@@ -171,33 +178,49 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.val_cols = self.feature_columns
         self.add_ts_meta = add_ts_meta
         self.multivariate_join = multivariate_join
+        self.imputation_method = imputation_method
         self.imputation_kwargs = imputation_kwargs or {}
         self.cross_standardisation = cross_standardisation
         self.max_cross_missingness = max_cross_missingness
+        self.cluster_kwargs = cluster_kwargs
 
         if clustering_algorithm == "gmm":
+            cluster_kwargs = (
+                {"reg_covar": 1e-4, "covariance_type": "diag"}
+                if cluster_kwargs is None
+                else cluster_kwargs
+            )
             self.clustering_algorithm = GaussianMixture(
-                n_components=n_clusters, random_state=random_state
+                n_components=n_clusters, random_state=random_state, **cluster_kwargs
             )
         elif clustering_algorithm == "bgmm":
+            cluster_kwargs = (
+                {"reg_covar": 1e-4, "covariance_type": "diag"}
+                if cluster_kwargs is None
+                else cluster_kwargs
+            )
             self.clustering_algorithm = BayesianGaussianMixture(
-                n_components=n_clusters, random_state=random_state
+                n_components=n_clusters, random_state=random_state, **cluster_kwargs
             )
         else:
             raise ValueError("Invalid clustering algorithm")
 
         # Set up imputer with custom kwargs
         if imputation_method == "knn":
-            knn_kwargs = {"n_neighbors": 20}
-            knn_kwargs.update(self.imputation_kwargs)
+            knn_kwargs = (
+                {"n_neighbors": 20} if imputation_kwargs is None else imputation_kwargs
+            )
             self.imputer = KNNImputer(**knn_kwargs)
         elif imputation_method == "iterative":
-            iterative_kwargs = {
-                "max_iter": 10,
-                "random_state": random_state,
-                "verbose": verbose,
-            }
-            iterative_kwargs.update(self.imputation_kwargs)
+            iterative_kwargs = (
+                {
+                    "max_iter": 10,
+                    "random_state": random_state,
+                    "verbose": verbose,
+                }
+                if imputation_kwargs is None
+                else imputation_kwargs
+            )
             self.imputer = IterativeImputer(**iterative_kwargs)
         elif imputation_method == "miceforest":
             self.imputer = "mice"  # placeholder for miceforest
@@ -232,6 +255,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         }
 
         self.verbose = verbose
+        self.is_fitted = False
 
         if self.verbose:
             if self.imputation_kwargs:
@@ -285,24 +309,35 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 ts_meta = {
                     "NumMeas": ts.groupby(self.id_column).size(),
                     "MaxTime": ts.groupby(self.id_column)[self.time_column].max(),
-                    "MeanTimeDiff": ts.groupby(self.id_column)[self.time_column]
+                    "MeanTimeDiff": ts.groupby(self.id_column)[[self.time_column]]
                     .diff()
+                    .set_index(ts[self.id_column])
+                    .reset_index()
+                    .groupby(self.id_column)
                     .mean(),
-                    "RelTimeDiffVar": ts.groupby(self.id_column)[self.time_column]
+                    "RelTimeDiffVar": ts.groupby(self.id_column)[[self.time_column]]
                     .diff()
+                    .set_index(ts[self.id_column])
+                    .reset_index()
+                    .groupby(self.id_column)
                     .std()
-                    / ts.groupby(self.id_column)[self.time_column].diff().mean(),
+                    / ts.groupby(self.id_column)[[self.time_column]]
+                    .diff()
+                    .set_index(ts[self.id_column])
+                    .reset_index()
+                    .groupby(self.id_column)
+                    .mean(),
                     "TimeStdev": ts.groupby(self.id_column)[self.time_column].std(),
-                    "MeanVal": ts.groupby(self.id_column)[self.value_column].mean(),
-                    "StdVal": ts.groupby(self.id_column)[self.value_column].std(),
-                    "SkewVal": ts.groupby(self.id_column)[self.value_column].skew(),
-                    "Q91": ts.groupby(self.id_column)[self.value_column].quantile(0.91),
-                    "Q95": ts.groupby(self.id_column)[self.value_column].quantile(0.95),
-                    "Q99": ts.groupby(self.id_column)[self.value_column].quantile(0.99),
-                    "Q50": ts.groupby(self.id_column)[self.value_column].quantile(0.50),
-                    "Q01": ts.groupby(self.id_column)[self.value_column].quantile(0.01),
-                    "Q05": ts.groupby(self.id_column)[self.value_column].quantile(0.05),
-                    "Q09": ts.groupby(self.id_column)[self.value_column].quantile(0.10),
+                    "MeanVal": ts.groupby(self.id_column)[_feature_column].mean(),
+                    "StdVal": ts.groupby(self.id_column)[_feature_column].std(),
+                    "SkewVal": ts.groupby(self.id_column)[_feature_column].skew(),
+                    "Q91": ts.groupby(self.id_column)[_feature_column].quantile(0.91),
+                    "Q95": ts.groupby(self.id_column)[_feature_column].quantile(0.95),
+                    "Q99": ts.groupby(self.id_column)[_feature_column].quantile(0.99),
+                    "Q50": ts.groupby(self.id_column)[_feature_column].quantile(0.50),
+                    "Q01": ts.groupby(self.id_column)[_feature_column].quantile(0.01),
+                    "Q05": ts.groupby(self.id_column)[_feature_column].quantile(0.05),
+                    "Q09": ts.groupby(self.id_column)[_feature_column].quantile(0.10),
                 }
                 meta_time = time.perf_counter() - meta_start
                 if self.verbose:
@@ -466,6 +501,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
 
         # Remove perfectly correlated features
         #
+        remove_start = time.perf_counter()
         cols = ts_cross_combined.columns
         droplist = []
         keeplist = []
@@ -478,7 +514,11 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     duplicated.add((cl, cr))
         to_drop = list(set(droplist).difference(set(keeplist)))
         ts_cross_combined = ts_cross_combined.drop(columns=to_drop)
-
+        if self.verbose:
+            remove_time = time.perf_counter() - remove_start
+            logger.info(
+                f"Removed {len(duplicated)} columns because of duplication in {remove_time:.4f} seconds"
+            )
         # TODO: (OPTION) for cross-channel features combine cross-sect features a posteriori
         #
 
@@ -549,7 +589,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.clustering_algorithm.fit(ts_cross_combined)
         cluster_time = time.perf_counter() - cluster_start
         logger.info(f"Clustering completed in {cluster_time:.4f} seconds")
-
+        self.is_fitted = True
         self.ts_cross_combined = ts_cross_combined
 
         self.durations = durations
@@ -566,6 +606,12 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
     def predict(self, X=None):
         return self.clustering_algorithm.predict(self.ts_cross_combined)
 
+    def predict_proba(self, X=None):
+        assert hasattr(self.clustering_algorithm, "predict_proba"), (
+            "Clustering algorithm does not support predict_proba"
+        )
+        return self.clustering_algorithm.predict_proba(self.ts_cross_combined)
+
     def get_scores(self):
         # Davies-Bouldin
         # Calinski-Harabasz
@@ -576,24 +622,20 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         #
 
         # assert that clustering_algorithm is fitted
-        assert self.clustering_algorithm.is_fitted(), (
-            "Clustering algorithm is not fitted"
-        )
+        assert self.is_fitted, "Clustering algorithm is not fitted"
 
         score_dict = {}
         cluster_labels = self.clustering_algorithm.predict(self.ts_cross_combined)
         # Davies-Bouldin
-        score_dict["davies_bouldin"] = self.clustering_algorithm.davies_bouldin_score(
+        score_dict["davies_bouldin"] = davies_bouldin_score(
             self.ts_cross_combined, cluster_labels
         )
         # Calinski-Harabasz
-        score_dict["calinski_harabasz"] = (
-            self.clustering_algorithm.calinski_harabasz_score(
-                self.ts_cross_combined, cluster_labels
-            )
+        score_dict["calinski_harabasz"] = calinski_harabasz_score(
+            self.ts_cross_combined, cluster_labels
         )
         # Silhouette
-        score_dict["silhouette"] = self.clustering_algorithm.silhouette_score(
+        score_dict["silhouette"] = silhouette_score(
             self.ts_cross_combined, cluster_labels
         )
 
@@ -612,7 +654,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             probas = self.clustering_algorithm.predict_proba(self.ts_cross_combined)
             score_dict["mep"] = np.mean(-np.sum(probas * np.log(probas), axis=1))
             score_dict["mpp"] = np.mean(np.max(probas, axis=1))
-        return result
+        return score_dict
 
     def viz(self):
         # use Umap to visualize the clusters
@@ -635,3 +677,10 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         plt.xlabel("UMAP Component 1")
         plt.ylabel("UMAP Component 2")
         plt.show()
+
+
+# TODO: add class for DistanceBasedClustering
+# TODO: add class for ModelBasedClustering (Latent, Deeplearning)
+# TODO: add class for EvolutionaryClustering
+# TODO: add class for MarkovModelBasedClustering
+# TODO: add class for GnomeClustering
