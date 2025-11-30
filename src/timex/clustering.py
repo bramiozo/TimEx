@@ -276,7 +276,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         ts_cross = DataFrame()
         durations = None
 
-        # TODO: (OPTION) for cross-channel features combine into combi-channel, before cross-sect extraction
+        # Timing dictionary
+        self.timings = {}
 
         for var_num, _feature_column in enumerate(self.val_cols):
             print(_feature_column, flush=True)
@@ -295,6 +296,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 **{k: v for k, v in id_kwargs.items() if k != "val_col"},
             )
             filter_time = time.perf_counter() - filter_start
+            self.timings[f"{_feature_column}_filter"] = filter_time
             if self.verbose:
                 self.ts_filtered = ts
                 logger.info(
@@ -304,8 +306,6 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             # get meta data
             if self.add_ts_meta:
                 meta_start = time.perf_counter()
-                # per id extract number of measurements, max_time, time_per_measurement, time_var
-                #
                 ts_meta = {
                     "NumMeas": ts.groupby(self.id_column).size(),
                     "MaxTime": ts.groupby(self.id_column)[self.time_column].max(),
@@ -340,6 +340,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     "Q09": ts.groupby(self.id_column)[_feature_column].quantile(0.10),
                 }
                 meta_time = time.perf_counter() - meta_start
+                self.timings[f"{_feature_column}_meta"] = meta_time
                 if self.verbose:
                     logger.info(
                         f"Meta data extraction completed for {_feature_column} in {meta_time:.4f} seconds"
@@ -356,6 +357,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     **id_kwargs,
                 )
                 interp_time = time.perf_counter() - interp_start
+                self.timings[f"{_feature_column}_interpolation"] = interp_time
                 if self.verbose:
                     self.ts_interpolated = ts
                     logger.info(
@@ -363,7 +365,6 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     )
 
             if self.smoothing:
-                # TODO: refactor wrap into one function..
                 smooth_start = time.perf_counter()
                 if self.smoothing_type in [
                     "gaussian_kernel",
@@ -382,6 +383,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 else:
                     raise ValueError("Invalid smoothing type")
                 smooth_time = time.perf_counter() - smooth_start
+                self.timings[f"{_feature_column}_smoothing"] = smooth_time
                 if self.verbose:
                     self.ts_smoothed = ts
                     logger.info(
@@ -395,6 +397,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                         :: self.analysis_resolution // self.interpolation_resolution
                     ]
                 )
+                # No timing here, as it's a quick operation
                 if self.verbose:
                     self.ts_smoothed_filtered = ts
                     logger.info(
@@ -402,11 +405,14 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     )
 
             # prune all NaNs values
+            prune_start = time.perf_counter()
             ts = ts.dropna(subset=[_feature_column])
+            prune_time = time.perf_counter() - prune_start
+            self.timings[f"{_feature_column}_prune_nans"] = prune_time
             if self.verbose:
                 self.ts_smoothed_filtered = ts
                 logger.info(
-                    f"Selection after pruning NaNs for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
+                    f"Selection after pruning NaNs for {_feature_column} in {prune_time:.4f} seconds, TS: {ts.shape}"
                 )
 
             if self.normalise_timeseries:
@@ -415,6 +421,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     ts, scaler=self.normalisation_method, df_out=True, **id_kwargs
                 )
                 norm_time = time.perf_counter() - norm_start
+                self.timings[f"{_feature_column}_normalization"] = norm_time
                 if self.verbose:
                     self.ts_normalized = ts
                     logger.info(
@@ -426,11 +433,12 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             ts_cross, durations = extractor.get_crossectional(
                 ts, **self.extractors, **id_kwargs
             )
-            extract_time = time.perf_counter() - extract_start
+            extract_time_cross = time.perf_counter() - extract_start
+            self.timings[f"{_feature_column}_cross_sectional"] = extract_time_cross
             if self.verbose:
                 self.ts_cross = ts_cross
                 logger.info(
-                    f"Cross-sectional extraction completed for {_feature_column} in {extract_time:.4f} seconds, TS cross: {ts_cross.shape}"
+                    f"Cross-sectional extraction completed for {_feature_column} in {extract_time_cross:.4f} seconds, TS cross: {ts_cross.shape}"
                 )
 
             if self.add_ts_meta:
@@ -441,8 +449,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     v = v.set_index(self.id_column)
                     v.columns = [f"Meta_{k}"]
                     ts_cross = ts_cross.join(v, how="inner")
-                    # print(f"--- ts shape --- : {ts_cross.shape}, + {k}")
                 meta_add_time = time.perf_counter() - meta_add_start
+                self.timings[f"{_feature_column}_meta_add"] = meta_add_time
                 if self.verbose:
                     self.ts_cross = ts_cross
                     logger.info(
@@ -450,9 +458,8 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     )
 
             # add _feature_column as prefix
-            #
             ts_cross.columns = [f"{_feature_column}_{c}" for c in ts_cross.columns]
-
+            step_start_time = time.perf_counter()
             if var_num == 0:
                 ts_cross_combined = ts_cross
             if var_num > 0:
@@ -461,46 +468,46 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 )
 
             step_time = time.perf_counter() - step_start_time
+            self.timings[f"{_feature_column}_join"] = step_time
             if self.verbose:
                 self.ts_cross_combined = ts_cross_combined
                 logger.info(
-                    f"Joining completed for {_feature_column} in {extract_time:.4f} seconds"
+                    f"Joining completed for {_feature_column} in {step_time:.4f} seconds"
                 )
 
         # Replace all inf's and -inf's by NaN's
-        #
         replace_start = time.perf_counter()
         ts_cross_combined = ts_cross_combined.replace([inf, -inf], nan)
+        replace_time = time.perf_counter() - replace_start
+        self.timings["replace_inf"] = replace_time
         if self.verbose:
-            replace_time = time.perf_counter() - replace_start
             logger.info(f"Replaced inf's by NaN's in {replace_time:.4f} seconds")
 
         # Remove columns with >P% missingness
-        #
         remove_start = time.perf_counter()
         num_cols = ts_cross_combined.shape[1]
         ts_cross_combined = ts_cross_combined.dropna(
             axis=1, thresh=int(ts_cross_combined.shape[0] * self.max_cross_missingness)
         )
+        remove_time_missing = time.perf_counter() - remove_start
+        self.timings["remove_missing"] = remove_time_missing
         if self.verbose:
-            remove_time = time.perf_counter() - remove_start
             logger.info(
-                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with more than {self.max_cross_missingness * 100}% missingness in {remove_time:.4f} seconds"
+                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with more than {self.max_cross_missingness * 100}% missingness in {remove_time_missing:.4f} seconds"
             )
 
         # Remove columns with zero variance
-        #
         remove_start = time.perf_counter()
         num_cols = ts_cross_combined.shape[1]
         ts_cross_combined = ts_cross_combined.loc[:, ts_cross_combined.var() > 0]
+        remove_time_zerovar = time.perf_counter() - remove_start
+        self.timings["remove_zerovar"] = remove_time_zerovar
         if self.verbose:
-            remove_time = time.perf_counter() - remove_start
             logger.info(
-                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with zero variance {remove_time:.4f} seconds"
+                f"Removed {num_cols - ts_cross_combined.shape[1]} columns with zero variance {remove_time_zerovar:.4f} seconds"
             )
 
         # Remove perfectly correlated features
-        #
         remove_start = time.perf_counter()
         cols = ts_cross_combined.columns
         droplist = []
@@ -514,16 +521,14 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     duplicated.add((cl, cr))
         to_drop = list(set(droplist).difference(set(keeplist)))
         ts_cross_combined = ts_cross_combined.drop(columns=to_drop)
+        remove_time = time.perf_counter() - remove_start
+        self.timings["remove_duplicates"] = remove_time
         if self.verbose:
-            remove_time = time.perf_counter() - remove_start
             logger.info(
                 f"Removed {len(duplicated)} columns because of duplication in {remove_time:.4f} seconds"
             )
-        # TODO: (OPTION) for cross-channel features combine cross-sect features a posteriori
-        #
 
         # StandardScaling
-        #
         if self.cross_standardisation:
             scale_start = time.perf_counter()
             ts_cross_combined = DataFrame(
@@ -532,18 +537,17 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 columns=ts_cross_combined.columns,
             )
             scale_time = time.perf_counter() - scale_start
+            self.timings["standardization"] = scale_time
             if self.verbose:
                 self.ts_cross_combined = ts_cross_combined
                 logger.info(f"Standardization completed in {scale_time:.4f} seconds")
 
         # Imputation
-        #
         if ts_cross_combined.isna().sum().sum() > 0:
             impute_start = time.perf_counter()
             missing_count = ts_cross_combined.isna().sum().sum()
             logger.info(f"Found {missing_count} missing values, starting imputation")
             if self.imputer == "mice":
-                # Default miceforest kwargs
                 mice_kwargs = {
                     "save_all_iterations": True,
                     "random_state": 100,
@@ -553,7 +557,6 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
 
                 imp_kernel = mf.ImputationKernel(ts_cross_combined, **mice_kwargs)
 
-                # Mice iteration kwargs
                 mice_iter_kwargs = {"n_estimators": 50}
                 if "mice_iterations" in self.imputation_kwargs:
                     mice_iterations = self.imputation_kwargs.pop("mice_iterations")
@@ -577,17 +580,19 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                     columns=ts_cross_combined.columns,
                 )
             impute_time = time.perf_counter() - impute_start
+            self.timings["imputation"] = impute_time
             if self.verbose:
                 self.ts_cross_combined = ts_cross_combined
                 logger.info(f"Imputation completed in {impute_time:.4f} seconds")
         else:
             logger.debug(f"No missing values in cross-sectional data")
+            self.timings["imputation"] = 0.0
 
         # Clustering
-        #
         cluster_start = time.perf_counter()
         self.clustering_algorithm.fit(ts_cross_combined)
         cluster_time = time.perf_counter() - cluster_start
+        self.timings["clustering"] = cluster_time
         logger.info(f"Clustering completed in {cluster_time:.4f} seconds")
         self.is_fitted = True
         self.ts_cross_combined = ts_cross_combined
@@ -597,6 +602,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             logger.debug(f"Clustering completed")
 
         fit_total_time = time.perf_counter() - fit_start_time
+        self.timings["total"] = fit_total_time
         logger.info(
             f"CrossSectionalClustering.fit() completed in {fit_total_time:.4f} seconds"
         )
