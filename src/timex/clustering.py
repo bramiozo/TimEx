@@ -721,6 +721,21 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
 
 
 # TODO: add class for DistanceBasedClustering
+class DistanceBasedClustering(BaseEstimator, ClusterMixin):
+    # integrates interpolation and smoothing with
+    # 1. existing distance based clustering methods from aeon, tslearn, etc.
+    # 2. custom distance based clustering
+
+    def __init__(self, distance_metric="euclidean"):
+        self.distance_metric = distance_metric
+
+    def fit(self, X):
+        self.clusters = dbscan(X, metric=self.distance_metric)
+
+    def predict(self, X):
+        return self.clusters.labels_
+
+
 # TODO: add class for ModelBasedClustering (Latent, Deeplearning)
 # TODO: add class for EvolutionaryClustering
 # TODO: add class for MarkovModelBasedClustering
