@@ -27,6 +27,8 @@ from sklearn.metrics import (
     silhouette_score,
 )
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
+from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, OPTICS, DBSCAN
+from hdbscan import HDBSCAN
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from tslearn import clustering as tslearn_clustering
@@ -201,6 +203,39 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             )
             self.clustering_algorithm = BayesianGaussianMixture(
                 n_components=n_clusters, random_state=random_state, **cluster_kwargs
+            )
+        elif clustering_algorithm == "kmeans":
+            cluster_kwargs = (
+                {"n_init": 10, "max_iter": 500} if cluster_kwargs is None else cluster_kwargs
+            )
+            self.clustering_algorithm = KMeans(
+                n_clusters=n_clusters, random_state=random_state, **cluster_kwargs
+            )
+        elif clustering_algorithm == "optics":
+            cluster_kwargs = (
+                {"min_samples": 5, "max_eps": 0.5, "p": 1} if cluster_kwargs is None else cluster_kwargs
+            )
+            self.clustering_algorithm = OPTICS(**cluster_kwargs)
+        elif clustering_algorithm == "hdbscan":
+            cluster_kwargs = (
+                {"min_samples": 5, "max_cluster_size": 1000} if cluster_kwargs is None else cluster_kwargs
+            )
+            self.clustering_algorithm = HDBSCAN(**cluster_kwargs)
+        elif clustering_algorithm == "spectral":
+            cluster_kwargs = (
+                {"n_init": 10, "max_iter": 500, "affinity": "rbf"} if cluster_kwargs is None else cluster_kwargs
+            )
+            self.clustering_algorithm = SpectralClustering(
+                n_clusters=n_clusters, random_state=random_state, **cluster_kwargs
+            )
+        elif clustering_algorithm == "hierarchical":
+            cluster_kwargs = (
+                {"n_clusters": n_clusters, "linkage": "ward", "metric": "manhattan"}
+                if cluster_kwargs is None
+                else cluster_kwargs
+            )
+            self.clustering_algorithm = AgglomerativeClustering(
+                **cluster_kwargs
             )
         else:
             raise ValueError("Invalid clustering algorithm")
