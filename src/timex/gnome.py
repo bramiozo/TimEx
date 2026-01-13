@@ -8,3 +8,7 @@
 # we can draw a path through the maxima. Can we combine the presence-matrix
 # with a 2d Markov decision matrix?
 #
+# 3. integrate the paths through (y^',t) with a kernel and with a grid-intersection integral
+# 4. Use Markov Chain approximation to compute transition probabilities between grid cells 
+# 5. 
+
