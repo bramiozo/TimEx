@@ -7,13 +7,15 @@ import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+import threading
 
 def make_s3(region: str, ak=None, sk=None, st=None):
     cfg = Config(
         signature_version="s3v4",
         s3={"addressing_style": "virtual", "use_arn_region": True},
         region_name=region,
+        max_pool_connections=200,
     )
     return boto3.client(
         "s3",
@@ -44,50 +46,131 @@ def whoami(ak=None, sk=None, st=None, region="us-east-1"):
     )
     return sts.get_caller_identity()
 
-def download_list_mode(s3, bucket_arn: str, output: Path, prefix: Optional[str]):
+def download_list_mode(
+    s3,
+    bucket_arn: str,
+    output: Path,
+    prefix: Optional[str],
+    workers: int = 64,
+    max_in_flight: int = 512,
+):
+    """
+    List objects with pagination and download them concurrently.
+
+    - workers: number of download threads
+    - max_in_flight: cap on pending futures to avoid huge memory use on millions of keys
+    """
     paginator = s3.get_paginator("list_objects_v2")
-    kwargs = {"Bucket": bucket_arn, 
-              "RequestPayer": "requester",
-              "Prefix": prefix or ""}
-    total = 0
+    kwargs = {
+        "Bucket": bucket_arn,
+        "RequestPayer": "requester",
+        "Prefix": prefix or "",
+    }
+
     # sanity probe
     print("Probing..")
     s3.list_objects_v2(Bucket=bucket_arn, MaxKeys=1, RequestPayer="requester")
     print("---success---")
-    print("Continuing with pagination...")
-    for page in paginator.paginate(**kwargs):
-        for obj in page.get("Contents", []) or []:
-            key = obj["Key"]
-            dest = output / key
+    print(f"Continuing with pagination... (workers={workers}, max_in_flight={max_in_flight})")
+
+    total_listed = 0
+    submitted = 0
+    downloaded = 0
+    skipped = 0
+    errors = 0
+
+    lock = threading.Lock()
+    in_flight = set()
+
+    def _download_one(key: str, dest: Path):
+        nonlocal downloaded, skipped, errors
+        try:
+            # double-check exists (race-safe-ish)
+            if dest.exists():
+                with lock:
+                    skipped += 1
+                return
+
             ensure_dir(dest)
+            s3.download_file(
+                bucket_arn,
+                key,
+                str(dest),
+                ExtraArgs={"RequestPayer": "requester"},
+            )
+            with lock:
+                downloaded += 1
+        except Exception as e:
+            with lock:
+                errors += 1
+            print(f"ERROR downloading {key}: {e}", file=sys.stderr)
 
-            if not dest.exists():
-                print(f"Downloading: {key} -> {dest}")
-                s3.download_file(bucket_arn, 
-                                key, 
-                                str(dest),
-                                ExtraArgs={"RequestPayer": "requester"})
-            total += 1
-    if total == 0:
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for page in paginator.paginate(**kwargs):
+            for obj in page.get("Contents", []) or []:
+                key = obj["Key"]
+                dest = output / key
+                total_listed += 1
+
+                # quick skip without scheduling work
+                if dest.exists():
+                    skipped += 1
+                    continue
+
+                # throttle: don’t let too many futures accumulate
+                while len(in_flight) >= max_in_flight:
+                    done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+                    # propagate exceptions (already handled in _download_one, but keep safe)
+                    for f in done:
+                        _ = f.result()
+
+                fut = ex.submit(_download_one, key, dest)
+                in_flight.add(fut)
+                submitted += 1
+
+                if submitted % 1000 == 0:
+                    with lock:
+                        print(
+                            f"listed={total_listed} submitted={submitted} "
+                            f"downloaded={downloaded} skipped={skipped} errors={errors}"
+                        )
+
+        # finish remaining
+        if in_flight:
+            done, _pending = wait(in_flight)
+            for f in done:
+                _ = f.result()
+
+    if total_listed == 0:
         print("No objects found (check prefix/permissions).")
+    else:
+        print(
+            f"Done. listed={total_listed} submitted={submitted} "
+            f"downloaded={downloaded} skipped={skipped} errors={errors}"
+        )
 
-def download_keys_mode(s3, bucket_arn: str, output: Path, keys_file: Path, strip_prefix: Optional[str]):
-    total = 0
-    for key in iter_keys_from_file(keys_file):
+def download_keys_mode(s3, bucket_arn, output, keys_file, strip_prefix, workers=64):
+    keys = list(iter_keys_from_file(keys_file))
+
+    def _download(key):
         use_key = key[len(strip_prefix):] if strip_prefix and key.startswith(strip_prefix) else key
         dest = output / use_key
         ensure_dir(dest)
-        try:
-            print(f"Downloading: {key} -> {dest}")
-            s3.download_file(bucket_arn, 
-                             key, 
-                             str(dest),
-                             ExtraArgs={"RequestPayer": "requester"})
-            total += 1
-        except ClientError as e:
-            print(f"ERROR for {key}: {e}", file=sys.stderr)
-    if total == 0:
-        print("No objects downloaded. Check keys/permissions.")
+        if not dest.exists():
+            s3.download_file(
+                bucket_arn,
+                key,
+                str(dest),
+                ExtraArgs={"RequestPayer": "requester"},
+            )
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_download, k) for k in keys]
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception as e:
+                print(f"ERROR: {e}", file=sys.stderr)
 
 def main():
     # Load .env file if present
@@ -130,7 +213,8 @@ def main():
     # optional assume role (won't work until other org sets it up)
     if args.assume_role_arn:
         sts = boto3.client("sts", region_name=args.region)
-        params = {"RoleArn": args.assume_role_arn, "RoleSessionName": "s3-download-session"}
+        params = {"RoleArn": args.assume_role_arn,
+                  "RoleSessionName": "s3-download-session"}
         if args.external_id:
             params["ExternalId"] = args.external_id
         resp = sts.assume_role(**params)
