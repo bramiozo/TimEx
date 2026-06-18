@@ -27,7 +27,13 @@ from sklearn.metrics import (
     silhouette_score,
 )
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
-from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, OPTICS, DBSCAN
+from sklearn.cluster import (
+    KMeans,
+    SpectralClustering,
+    AgglomerativeClustering,
+    OPTICS,
+    DBSCAN,
+)
 from hdbscan import HDBSCAN
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
@@ -206,24 +212,32 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             )
         elif clustering_algorithm == "kmeans":
             cluster_kwargs = (
-                {"n_init": 10, "max_iter": 500} if cluster_kwargs is None else cluster_kwargs
+                {"n_init": 10, "max_iter": 500}
+                if cluster_kwargs is None
+                else cluster_kwargs
             )
             self.clustering_algorithm = KMeans(
                 n_clusters=n_clusters, random_state=random_state, **cluster_kwargs
             )
         elif clustering_algorithm == "optics":
             cluster_kwargs = (
-                {"min_samples": 5, "max_eps": 0.5, "p": 1} if cluster_kwargs is None else cluster_kwargs
+                {"min_samples": 5, "max_eps": 0.5, "p": 1}
+                if cluster_kwargs is None
+                else cluster_kwargs
             )
             self.clustering_algorithm = OPTICS(**cluster_kwargs)
         elif clustering_algorithm == "hdbscan":
             cluster_kwargs = (
-                {"min_samples": 5, "max_cluster_size": 1000} if cluster_kwargs is None else cluster_kwargs
+                {"min_samples": 5, "max_cluster_size": 1000}
+                if cluster_kwargs is None
+                else cluster_kwargs
             )
             self.clustering_algorithm = HDBSCAN(**cluster_kwargs)
         elif clustering_algorithm == "spectral":
             cluster_kwargs = (
-                {"n_init": 10, "max_iter": 500, "affinity": "rbf"} if cluster_kwargs is None else cluster_kwargs
+                {"n_init": 10, "max_iter": 500, "affinity": "rbf"}
+                if cluster_kwargs is None
+                else cluster_kwargs
             )
             self.clustering_algorithm = SpectralClustering(
                 n_clusters=n_clusters, random_state=random_state, **cluster_kwargs
@@ -234,9 +248,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
                 if cluster_kwargs is None
                 else cluster_kwargs
             )
-            self.clustering_algorithm = AgglomerativeClustering(
-                **cluster_kwargs
-            )
+            self.clustering_algorithm = AgglomerativeClustering(**cluster_kwargs)
         else:
             raise ValueError("Invalid clustering algorithm")
 
@@ -720,23 +732,63 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         plt.show()
 
 
+# TODO: for the categorisation of the clustering methods, use figure 6 of the paper; https://arxiv.org/html/2412.20582v1
+
 # TODO: add class for DistanceBasedClustering
-class DistanceBasedClustering(BaseEstimator, ClusterMixin):
+#
+class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
     # integrates interpolation and smoothing with
     # 1. existing distance based clustering methods from aeon, tslearn, etc.
     # 2. custom distance based clustering
 
-    def __init__(self, distance_metric="euclidean"):
+    def __init__(
+        self,
+        distance_metric: Literal[
+            "dtw", "ctw", "frechet", "softdtw_normalized", "euclidean", "precomputed"
+        ] = "euclidean",
+        backend: Literal["tslearn", "aeon", "sktime"] = "tslearn",
+        method: Literal["kmeans", "kmedoids", "kshapes", "kernelkmeans", "kasba"]
+    ):
         self.distance_metric = distance_metric
 
     def fit(self, X):
-        self.clusters = dbscan(X, metric=self.distance_metric)
+        # assume pre-calculated distance matrix
+        self.clusters = ..
+
+    def predict(self, X):
+        return self.clusters.labels_
+
+class TSDensityBasedClustering(BaseEstimator, ClusterMixin):
+    # integrates interpolation and smoothing with
+    # 1. existing distance based clustering methods from aeon, tslearn, etc.
+    # 2. custom distance based clustering
+
+    def __init__(
+        self,
+        distance_metric: Literal[
+            "dtw", "ctw", "frechet", "softdtw_normalized", "euclidean", "precomputed"
+        ] = "euclidean",
+        backend: Literal["tslearn", "aeon", "sktime"] = "tslearn",
+        method: Literal["dbscan",]
+    ):
+        self.distance_metric = distance_metric
+
+    def fit(self, X):
+        # assume pre-calculated distance matrix
+        self.clusters = ..
 
     def predict(self, X):
         return self.clusters.labels_
 
 
 # TODO: add class for ModelBasedClustering (Latent, Deeplearning)
+#
+
 # TODO: add class for EvolutionaryClustering
+#
+
 # TODO: add class for MarkovModelBasedClustering
+#
+
 # TODO: add class for GnomeClustering
+#
