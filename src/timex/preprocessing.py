@@ -31,27 +31,31 @@ def normalise_ts(
     df_out=False,
     scaler: Literal["standard", "minmax"] = "standard",
 ):
-    if scaler == "standard":
-        scaler = TimeSeriesScalerMeanVariance()  # StandardScaler()
-    elif scaler == "minmax":
-        scaler = TimeSeriesScalerMinMax()  # MinMaxScaler()
-
-    # group_scaler = GroupedTransformer(scaler, groups=id_col)
-    # ts_df[val_col] = group_scaler.fit_transform(ts_df)
-    # print(ts_df.shape)
+    if scaler not in {"standard", "minmax"}:
+        raise ValueError("scaler must be 'standard' or 'minmax'")
 
     res = {id_col: [], time_col: [], val_col: []}
     for _id in tqdm(ts_df[id_col].unique()):
-        _df = ts_df.loc[ts_df[id_col] == _id][[id_col, time_col, val_col]]
-        ts = _df[val_col].values
-        ts = ts.reshape(1, -1, 1)
-        ts = scaler.fit_transform(ts)
-        ts = ts.reshape(-1)
-        _df[val_col] = ts
+        _df = ts_df.loc[ts_df[id_col] == _id][[id_col, time_col, val_col]].copy()
+
+        vals = _df[val_col].to_numpy(dtype=float)
+        finite_mask = np.isfinite(vals)
+        scaled = np.full(vals.shape, np.nan, dtype=float)
+
+        if finite_mask.any():
+            x = vals[finite_mask].reshape(-1, 1)
+            if scaler == "standard":
+                scaler_model = StandardScaler()
+            else:
+                scaler_model = MinMaxScaler()
+            scaled[finite_mask] = scaler_model.fit_transform(x).reshape(-1)
+
+        _df[val_col] = scaled
 
         res[id_col].extend(_df[id_col].values)
         res[time_col].extend(_df[time_col].values)
         res[val_col].extend(_df[val_col].values)
+
     if df_out:
         return pd.DataFrame(res)
     else:
@@ -97,17 +101,34 @@ def get_interpolated(
     """
 
     # TODO: implementation version where each ID has it's own max_time
+    if max_time is None:
+        finite_time = ts_df[time_col].replace([np.inf, -np.inf], np.nan).dropna()
+        if finite_time.empty:
+            raise ValueError("No finite time values available for interpolation")
+        max_time = int(np.ceil(finite_time.max())) + int(time_res)
+
     trange = np.arange(-time_before, max_time, time_res)
     if (keep_t0_value) & (time_before > 0):
         trange = np.insert(trange, 1, 0)
 
     res = {id_col: [], time_col: [], val_col: []}
     for _id in tqdm(ts_df[id_col].unique()):
-        _df = ts_df.loc[ts_df[id_col] == _id][[time_col, val_col]]
-        x = _df[time_col]
-        y = _df[val_col]
-        interpolator = interpolate.PchipInterpolator(x, y, extrapolate=False)
-        interpolated = interpolator(trange)
+        _df = ts_df.loc[ts_df[id_col] == _id][[time_col, val_col]].copy()
+
+        # PCHIP requires finite values and strictly increasing x.
+        _df = _df.replace([np.inf, -np.inf], np.nan).dropna(subset=[time_col, val_col])
+        _df = _df.sort_values(by=time_col)
+
+        # collapse duplicated time points to one value
+        _df = _df.groupby(time_col, as_index=False)[val_col].mean()
+
+        if _df.shape[0] < 2:
+            interpolated = np.full(shape=len(trange), fill_value=np.nan, dtype=float)
+        else:
+            x = _df[time_col].to_numpy(dtype=float)
+            y = _df[val_col].to_numpy(dtype=float)
+            interpolator = interpolate.PchipInterpolator(x, y, extrapolate=False)
+            interpolated = interpolator(trange)
 
         ids = len(trange) * [_id]
 

@@ -35,7 +35,7 @@ from sklearn.cluster import (
     DBSCAN,
 )
 from hdbscan import HDBSCAN
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from tqdm import tqdm
 from tslearn import clustering as tslearn_clustering
 from umap import UMAP
@@ -58,6 +58,278 @@ logging.getLogger("umap").setLevel(logging.WARNING)
 logging.getLogger("numba").setLevel(logging.WARNING)
 
 
+VALID_SMOOTHING_METHODS = {
+    "gaussian_kernel",
+    "gaussian_kernel_simple",
+    "rolling_mean",
+    "box_kernel",
+}
+
+
+def build_imputer(
+    imputation_method: str,
+    imputation_kwargs: dict[str, Any] | None,
+    random_state: int,
+    verbose: bool,
+):
+    """Build and return an imputer instance (or miceforest sentinel)."""
+    imputation_kwargs = imputation_kwargs or {}
+
+    if imputation_method == "knn":
+        knn_kwargs = {"n_neighbors": 20}
+        knn_kwargs.update(imputation_kwargs)
+        return KNNImputer(**knn_kwargs)
+
+    if imputation_method == "iterative":
+        iterative_kwargs = {
+            "max_iter": 10,
+            "random_state": random_state,
+            "verbose": verbose,
+        }
+        iterative_kwargs.update(imputation_kwargs)
+        return IterativeImputer(**iterative_kwargs)
+
+    if imputation_method == "miceforest":
+        return "mice"
+
+    if imputation_method in {"mean", "median", "most_frequent", "constant"}:
+        simple_kwargs = {"strategy": imputation_method}
+        if imputation_method == "constant":
+            simple_kwargs["fill_value"] = 0
+        simple_kwargs.update(imputation_kwargs)
+        return SimpleImputer(**simple_kwargs)
+
+    raise ValueError("Invalid imputation method")
+
+
+def apply_interpolation(
+    ts: DataFrame,
+    id_kwargs: dict[str, str],
+    interpolation_resolution: int,
+    max_time: Optional[int],
+    interpolation_keep_init: bool,
+    interpolation_kwargs: dict[str, Any] | None = None,
+) -> DataFrame:
+    """Apply interpolation to a long-format time-series DataFrame."""
+    _interpolation_kwargs = dict(interpolation_kwargs or {})
+    return preprocessing.get_interpolated(
+        ts,
+        time_res=interpolation_resolution,
+        max_time=max_time,
+        keep_t0_value=interpolation_keep_init,
+        df_out=True,
+        **id_kwargs,
+        **_interpolation_kwargs,
+    )
+
+
+def apply_smoothing(
+    ts: DataFrame,
+    id_kwargs: dict[str, str],
+    smoothing_type: Literal[
+        "gaussian_kernel", "gaussian_kernel_simple", "box_kernel", "rolling_mean"
+    ],
+    smoothing_window_size: int,
+    n_skip: int,
+    smoothing_kwargs: dict[str, Any] | None = None,
+) -> DataFrame:
+    """Apply smoothing to a long-format time-series DataFrame."""
+    if smoothing_type not in VALID_SMOOTHING_METHODS:
+        raise ValueError("Invalid smoothing type")
+
+    _smoothing_kwargs = dict(smoothing_kwargs or {})
+    return preprocessing.get_smoothed(
+        ts_df=ts,
+        window=smoothing_window_size,
+        Nskip=n_skip,
+        df_out=True,
+        smoothing_method=smoothing_type,
+        **id_kwargs,
+        **_smoothing_kwargs,
+    )
+
+
+def impute_cross_sectional(
+    ts_cross_combined: DataFrame,
+    imputer: Any,
+    imputation_kwargs: dict[str, Any] | None,
+) -> DataFrame:
+    """Impute missing values for cross-sectional features."""
+    imputation_kwargs = dict(imputation_kwargs or {})
+
+    if imputer == "mice":
+        mice_iterations = imputation_kwargs.pop("mice_iterations", 10)
+        n_estimators = imputation_kwargs.pop("n_estimators", 50)
+
+        mice_kwargs = {
+            "save_all_iterations": True,
+            "random_state": 100,
+            "num_datasets": 1,
+        }
+        mice_kwargs.update(imputation_kwargs)
+
+        imp_kernel = mf.ImputationKernel(ts_cross_combined, **mice_kwargs)
+        imp_kernel.mice(mice_iterations, n_estimators=n_estimators)
+        return imp_kernel.complete_data()
+
+    # Some sklearn imputers can effectively drop all-missing columns in output.
+    # Keep shape stable by imputing only columns with >=1 observed value, then
+    # restoring all-missing columns with 0.0.
+    non_empty_cols = ts_cross_combined.columns[~ts_cross_combined.isna().all(axis=0)]
+    empty_cols = ts_cross_combined.columns[ts_cross_combined.isna().all(axis=0)]
+
+    out = ts_cross_combined.copy()
+
+    if len(non_empty_cols) > 0:
+        transformed = imputer.fit_transform(ts_cross_combined[non_empty_cols])
+        out.loc[:, non_empty_cols] = transformed
+
+    if len(empty_cols) > 0:
+        out.loc[:, empty_cols] = 0.0
+
+    return out
+
+
+def preprocess_timeseries_feature(
+    ts: DataFrame,
+    *,
+    id_column: str,
+    time_column: str,
+    feature_column: str,
+    min_measurements_per_id: int = 1,
+    min_time: Optional[int] = None,
+    max_time: Optional[int] = None,
+    interpolation: bool = False,
+    interpolation_resolution: int = 1,
+    interpolation_keep_init: bool = False,
+    interpolation_kwargs: dict[str, Any] | None = None,
+    smoothing: bool = False,
+    smoothing_type: Literal[
+        "gaussian_kernel", "gaussian_kernel_simple", "box_kernel", "rolling_mean"
+    ] = "gaussian_kernel",
+    smoothing_window_size: int = 4,
+    n_skip: int = 1,
+    smoothing_kwargs: dict[str, Any] | None = None,
+    analysis_resolution: int = 1,
+    dropna_before_normalisation: bool = False,
+    normalise_timeseries: Optional[Literal["bulk", "group"]] = None,
+    normalisation_method: Optional[Literal["standard", "minmax"]] = "standard",
+    return_details: bool = False,
+):
+    """Shared preprocessing pipeline for a single feature column.
+
+    Used by both CrossSectionalClustering and TSDistanceBasedClustering.
+    """
+    out = ts[[id_column, time_column, feature_column]].copy()
+    stages: dict[str, DataFrame] = {}
+    timings: dict[str, float] = {
+        "filter": 0.0,
+        "interpolation": 0.0,
+        "smoothing": 0.0,
+        "analysis_selection": 0.0,
+        "prune_nans": 0.0,
+        "normalization": 0.0,
+    }
+
+    if max_time is not None and min_time is not None and max_time < min_time:
+        raise ValueError("max_time must be equal or greater than min_time")
+    if analysis_resolution % interpolation_resolution != 0:
+        raise ValueError(
+            "Analysis resolution must be a multiple of interpolation resolution"
+        )
+
+    filter_start = time.perf_counter()
+    if max_time is not None:
+        out = out.loc[out[time_column] <= max_time]
+
+    if min_time is not None:
+        max_per_id = out.groupby(id_column)[time_column].max()
+        keep_ids = max_per_id[max_per_id >= min_time].index
+        out = out.loc[out[id_column].isin(keep_ids)]
+
+    if min_measurements_per_id is not None and min_measurements_per_id > 1:
+        counts = out.groupby(id_column).size()
+        keep_ids = counts[counts >= min_measurements_per_id].index
+        out = out.loc[out[id_column].isin(keep_ids)]
+    timings["filter"] = time.perf_counter() - filter_start
+    stages["filtered"] = out.copy()
+
+    id_kwargs = {
+        "id_col": id_column,
+        "time_col": time_column,
+        "val_col": feature_column,
+    }
+
+    if interpolation:
+        interp_start = time.perf_counter()
+        out = apply_interpolation(
+            ts=out,
+            id_kwargs=id_kwargs,
+            interpolation_resolution=interpolation_resolution,
+            max_time=max_time,
+            interpolation_keep_init=interpolation_keep_init,
+            interpolation_kwargs=interpolation_kwargs,
+        )
+        timings["interpolation"] = time.perf_counter() - interp_start
+        stages["interpolated"] = out.copy()
+
+    if smoothing:
+        smooth_start = time.perf_counter()
+        out = apply_smoothing(
+            ts=out,
+            id_kwargs=id_kwargs,
+            smoothing_type=smoothing_type,
+            smoothing_window_size=smoothing_window_size,
+            n_skip=n_skip,
+            smoothing_kwargs=smoothing_kwargs,
+        )
+        timings["smoothing"] = time.perf_counter() - smooth_start
+        stages["smoothed"] = out.copy()
+
+    if analysis_resolution != interpolation_resolution:
+        sel_start = time.perf_counter()
+        step = analysis_resolution // interpolation_resolution
+        out = out.groupby(id_column, group_keys=False).apply(
+            lambda x: x.sort_values(time_column).iloc[::step]
+        )
+        timings["analysis_selection"] = time.perf_counter() - sel_start
+        stages["analysis_selected"] = out.copy()
+
+    if dropna_before_normalisation:
+        prune_start = time.perf_counter()
+        out = out.dropna(subset=[feature_column])
+        timings["prune_nans"] = time.perf_counter() - prune_start
+        stages["dropna"] = out.copy()
+
+    if normalise_timeseries == "group":
+        norm_start = time.perf_counter()
+        out = preprocessing.normalise_ts(
+            out,
+            id_col=id_column,
+            time_col=time_column,
+            val_col=feature_column,
+            scaler=normalisation_method,
+            df_out=True,
+        )
+        timings["normalization"] = time.perf_counter() - norm_start
+        stages["normalised"] = out.copy()
+    elif normalise_timeseries == "bulk":
+        norm_start = time.perf_counter()
+        if normalisation_method == "standard":
+            scaler = StandardScaler()
+        elif normalisation_method == "minmax":
+            scaler = MinMaxScaler()
+        else:
+            raise ValueError("Invalid normalisation_method")
+        out[feature_column] = scaler.fit_transform(out[[feature_column]])
+        timings["normalization"] = time.perf_counter() - norm_start
+        stages["normalised"] = out.copy()
+
+    if return_details:
+        return {"ts": out, "stages": stages, "timings": timings}
+    return out
+
+
 class CrossSectionalClustering(BaseEstimator, ClusterMixin):
     # https://tslearn.readthedocs.io/en/stable/gen_modules/clustering/tslearn.clustering.CrossSectionalClustering.html#tslearn.clustering.CrossSectionalClustering
     def __init__(
@@ -71,6 +343,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         interpolation: bool = False,
         interpolation_resolution: int = 1,
         interpolation_keep_init: bool = False,
+        interpolation_kwargs: dict[str, Any] | None = None,
         analysis_resolution: int = 90,
         min_measurements_per_id: int = 10,
         min_time: Optional[int] = None,
@@ -100,8 +373,17 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         feature_columns: List[str] = None,
         add_ts_meta: bool = False,
         multivariate_join: str = "inner",
-        imputation_method: Literal["knn", "iterative", "miceforest"] = "knn",
+        imputation_method: Literal[
+            "knn",
+            "iterative",
+            "miceforest",
+            "mean",
+            "median",
+            "most_frequent",
+            "constant",
+        ] = "knn",
         imputation_kwargs: dict[str, Any] | None = None,
+        smoothing_kwargs: dict[str, Any] | None = None,
         cross_standardisation: bool = True,
         max_cross_missingness: float = 0.75,
         verbose: bool = False,
@@ -171,6 +453,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.interpolation = interpolation
         self.interpolation_resolution = interpolation_resolution
         self.interpolation_keep_init = interpolation_keep_init
+        self.interpolation_kwargs = interpolation_kwargs or {}
         self.analysis_resolution = analysis_resolution
         self.min_measurements_per_id = min_measurements_per_id
         self.min_time = min_time
@@ -188,6 +471,7 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         self.multivariate_join = multivariate_join
         self.imputation_method = imputation_method
         self.imputation_kwargs = imputation_kwargs or {}
+        self.smoothing_kwargs = smoothing_kwargs or {}
         self.cross_standardisation = cross_standardisation
         self.max_cross_missingness = max_cross_missingness
         self.cluster_kwargs = cluster_kwargs
@@ -252,43 +536,12 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         else:
             raise ValueError("Invalid clustering algorithm")
 
-        # Set up imputer with custom kwargs
-        if imputation_method == "knn":
-            knn_kwargs = (
-                {"n_neighbors": 20} if imputation_kwargs is None else imputation_kwargs
-            )
-            self.imputer = KNNImputer(**knn_kwargs)
-        elif imputation_method == "iterative":
-            iterative_kwargs = (
-                {
-                    "max_iter": 10,
-                    "random_state": random_state,
-                    "verbose": verbose,
-                }
-                if imputation_kwargs is None
-                else imputation_kwargs
-            )
-            self.imputer = IterativeImputer(**iterative_kwargs)
-        elif imputation_method == "miceforest":
-            self.imputer = "mice"  # placeholder for miceforest
-        elif imputation_method == "mean":
-            simple_kwargs = {"strategy": "mean"}
-            simple_kwargs.update(self.imputation_kwargs)
-            self.imputer = SimpleImputer(**simple_kwargs)
-        elif imputation_method == "median":
-            simple_kwargs = {"strategy": "median"}
-            simple_kwargs.update(self.imputation_kwargs)
-            self.imputer = SimpleImputer(**simple_kwargs)
-        elif imputation_method == "most_frequent":
-            simple_kwargs = {"strategy": "most_frequent"}
-            simple_kwargs.update(self.imputation_kwargs)
-            self.imputer = SimpleImputer(**simple_kwargs)
-        elif imputation_method == "constant":
-            simple_kwargs = {"strategy": "constant", "fill_value": 0}
-            simple_kwargs.update(self.imputation_kwargs)
-            self.imputer = SimpleImputer(**simple_kwargs)
-        else:
-            raise ValueError("Invalid imputation method")
+        self.imputer = build_imputer(
+            imputation_method=imputation_method,
+            imputation_kwargs=self.imputation_kwargs,
+            random_state=random_state,
+            verbose=verbose,
+        )
 
         self.extractors = {
             "custom_features": "custom" in extractors,
@@ -334,145 +587,124 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             id_kwargs["val_col"] = _feature_column
             ts = tsdf[[self.id_column, self.time_column, _feature_column]]
 
-            # Filtering step
-            filter_start = time.perf_counter()
-            ts = preprocessing.get_filtered_df(
+            preproc = preprocess_timeseries_feature(
                 ts,
+                id_column=self.id_column,
+                time_column=self.time_column,
+                feature_column=_feature_column,
+                min_measurements_per_id=self.min_measurements_per_id,
                 min_time=self.min_time,
-                min_measurements=self.min_measurements_per_id,
-                **{k: v for k, v in id_kwargs.items() if k != "val_col"},
+                max_time=self.max_time,
+                interpolation=self.interpolation,
+                interpolation_resolution=self.interpolation_resolution,
+                interpolation_keep_init=self.interpolation_keep_init,
+                interpolation_kwargs=self.interpolation_kwargs,
+                smoothing=self.smoothing,
+                smoothing_type=self.smoothing_type,
+                smoothing_window_size=self.smoothing_window_size,
+                n_skip=self.n_skip,
+                smoothing_kwargs=self.smoothing_kwargs,
+                analysis_resolution=self.analysis_resolution,
+                dropna_before_normalisation=True,
+                normalise_timeseries=self.normalise_timeseries,
+                normalisation_method=self.normalisation_method,
+                return_details=True,
             )
-            filter_time = time.perf_counter() - filter_start
-            self.timings[f"{_feature_column}_filter"] = filter_time
+            ts = preproc["ts"]
+            stages = preproc["stages"]
+            prep_timings = preproc["timings"]
+
+            self.timings[f"{_feature_column}_filter"] = prep_timings["filter"]
+            self.timings[f"{_feature_column}_interpolation"] = prep_timings[
+                "interpolation"
+            ]
+            self.timings[f"{_feature_column}_smoothing"] = prep_timings["smoothing"]
+            self.timings[f"{_feature_column}_prune_nans"] = prep_timings["prune_nans"]
+            self.timings[f"{_feature_column}_normalization"] = prep_timings[
+                "normalization"
+            ]
+
             if self.verbose:
-                self.ts_filtered = ts
-                logger.info(
-                    f"Filtering completed for {_feature_column} in {filter_time:.4f} seconds. TS: {ts.shape}"
-                )
+                if "filtered" in stages:
+                    self.ts_filtered = stages["filtered"]
+                if "interpolated" in stages:
+                    self.ts_interpolated = stages["interpolated"]
+                if "smoothed" in stages:
+                    self.ts_smoothed = stages["smoothed"]
+                self.ts_smoothed_filtered = ts
+                if "normalised" in stages:
+                    self.ts_normalized = stages["normalised"]
 
             # get meta data
             if self.add_ts_meta:
                 meta_start = time.perf_counter()
+                ts_meta_src = stages.get("filtered", ts)
                 ts_meta = {
-                    "NumMeas": ts.groupby(self.id_column).size(),
-                    "MaxTime": ts.groupby(self.id_column)[self.time_column].max(),
-                    "MeanTimeDiff": ts.groupby(self.id_column)[[self.time_column]]
+                    "NumMeas": ts_meta_src.groupby(self.id_column).size(),
+                    "MaxTime": ts_meta_src.groupby(self.id_column)[
+                        self.time_column
+                    ].max(),
+                    "MeanTimeDiff": ts_meta_src.groupby(self.id_column)[
+                        [self.time_column]
+                    ]
                     .diff()
-                    .set_index(ts[self.id_column])
+                    .set_index(ts_meta_src[self.id_column])
                     .reset_index()
                     .groupby(self.id_column)
                     .mean(),
-                    "RelTimeDiffVar": ts.groupby(self.id_column)[[self.time_column]]
+                    "RelTimeDiffVar": ts_meta_src.groupby(self.id_column)[
+                        [self.time_column]
+                    ]
                     .diff()
-                    .set_index(ts[self.id_column])
+                    .set_index(ts_meta_src[self.id_column])
                     .reset_index()
                     .groupby(self.id_column)
                     .std()
-                    / ts.groupby(self.id_column)[[self.time_column]]
+                    / ts_meta_src.groupby(self.id_column)[[self.time_column]]
                     .diff()
-                    .set_index(ts[self.id_column])
+                    .set_index(ts_meta_src[self.id_column])
                     .reset_index()
                     .groupby(self.id_column)
                     .mean(),
-                    "TimeStdev": ts.groupby(self.id_column)[self.time_column].std(),
-                    "MeanVal": ts.groupby(self.id_column)[_feature_column].mean(),
-                    "StdVal": ts.groupby(self.id_column)[_feature_column].std(),
-                    "SkewVal": ts.groupby(self.id_column)[_feature_column].skew(),
-                    "Q91": ts.groupby(self.id_column)[_feature_column].quantile(0.91),
-                    "Q95": ts.groupby(self.id_column)[_feature_column].quantile(0.95),
-                    "Q99": ts.groupby(self.id_column)[_feature_column].quantile(0.99),
-                    "Q50": ts.groupby(self.id_column)[_feature_column].quantile(0.50),
-                    "Q01": ts.groupby(self.id_column)[_feature_column].quantile(0.01),
-                    "Q05": ts.groupby(self.id_column)[_feature_column].quantile(0.05),
-                    "Q09": ts.groupby(self.id_column)[_feature_column].quantile(0.10),
+                    "TimeStdev": ts_meta_src.groupby(self.id_column)[
+                        self.time_column
+                    ].std(),
+                    "MeanVal": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].mean(),
+                    "StdVal": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].std(),
+                    "SkewVal": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].skew(),
+                    "Q91": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.91),
+                    "Q95": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.95),
+                    "Q99": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.99),
+                    "Q50": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.50),
+                    "Q01": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.01),
+                    "Q05": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.05),
+                    "Q09": ts_meta_src.groupby(self.id_column)[
+                        _feature_column
+                    ].quantile(0.10),
                 }
                 meta_time = time.perf_counter() - meta_start
                 self.timings[f"{_feature_column}_meta"] = meta_time
                 if self.verbose:
                     logger.info(
                         f"Meta data extraction completed for {_feature_column} in {meta_time:.4f} seconds"
-                    )
-
-            if self.interpolation:
-                interp_start = time.perf_counter()
-                ts = preprocessing.get_interpolated(
-                    ts,
-                    time_res=self.interpolation_resolution,
-                    max_time=self.max_time,
-                    keep_t0_value=self.interpolation_keep_init,
-                    df_out=True,
-                    **id_kwargs,
-                )
-                interp_time = time.perf_counter() - interp_start
-                self.timings[f"{_feature_column}_interpolation"] = interp_time
-                if self.verbose:
-                    self.ts_interpolated = ts
-                    logger.info(
-                        f"Interpolation completed for {_feature_column} in {interp_time:.4f} seconds, TS: {ts.shape}"
-                    )
-
-            if self.smoothing:
-                smooth_start = time.perf_counter()
-                if self.smoothing_type in [
-                    "gaussian_kernel",
-                    "gaussian_kernel_simple",
-                    "rolling_mean",
-                    "box_kernel",
-                ]:
-                    ts = preprocessing.get_smoothed(
-                        ts_df=ts,
-                        window=self.smoothing_window_size,
-                        Nskip=self.n_skip,
-                        df_out=True,
-                        smoothing_method=self.smoothing_type,
-                        **id_kwargs,
-                    )
-                else:
-                    raise ValueError("Invalid smoothing type")
-                smooth_time = time.perf_counter() - smooth_start
-                self.timings[f"{_feature_column}_smoothing"] = smooth_time
-                if self.verbose:
-                    self.ts_smoothed = ts
-                    logger.info(
-                        f"Smoothing completed for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
-                    )
-
-            if self.analysis_resolution != self.interpolation_resolution:
-                # We need to keep only every self.analysis_resolution/self.interpolation_resolution values, per ID
-                ts = ts.groupby(self.id_column).apply(
-                    lambda x: x.iloc[
-                        :: self.analysis_resolution // self.interpolation_resolution
-                    ]
-                )
-                # No timing here, as it's a quick operation
-                if self.verbose:
-                    self.ts_smoothed_filtered = ts
-                    logger.info(
-                        f"Selection after smoothing for {_feature_column} in {smooth_time:.4f} seconds, TS: {ts.shape}"
-                    )
-
-            # prune all NaNs values
-            prune_start = time.perf_counter()
-            ts = ts.dropna(subset=[_feature_column])
-            prune_time = time.perf_counter() - prune_start
-            self.timings[f"{_feature_column}_prune_nans"] = prune_time
-            if self.verbose:
-                self.ts_smoothed_filtered = ts
-                logger.info(
-                    f"Selection after pruning NaNs for {_feature_column} in {prune_time:.4f} seconds, TS: {ts.shape}"
-                )
-
-            if self.normalise_timeseries:
-                norm_start = time.perf_counter()
-                ts = preprocessing.normalise_ts(
-                    ts, scaler=self.normalisation_method, df_out=True, **id_kwargs
-                )
-                norm_time = time.perf_counter() - norm_start
-                self.timings[f"{_feature_column}_normalization"] = norm_time
-                if self.verbose:
-                    self.ts_normalized = ts
-                    logger.info(
-                        f"Normalization completed for {_feature_column} in {norm_time:.4f} seconds, TS: {ts.shape}"
                     )
 
             # extract cross sectional
@@ -594,38 +826,15 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
             impute_start = time.perf_counter()
             missing_count = ts_cross_combined.isna().sum().sum()
             logger.info(f"Found {missing_count} missing values, starting imputation")
-            if self.imputer == "mice":
-                mice_kwargs = {
-                    "save_all_iterations": True,
-                    "random_state": 100,
-                    "num_datasets": 1,
-                }
-                mice_kwargs.update(self.imputation_kwargs)
-
-                imp_kernel = mf.ImputationKernel(ts_cross_combined, **mice_kwargs)
-
-                mice_iter_kwargs = {"n_estimators": 50}
-                if "mice_iterations" in self.imputation_kwargs:
-                    mice_iterations = self.imputation_kwargs.pop("mice_iterations")
-                else:
-                    mice_iterations = 10
-                if "n_estimators" in self.imputation_kwargs:
-                    mice_iter_kwargs["n_estimators"] = self.imputation_kwargs[
-                        "n_estimators"
-                    ]
-
-                logger.info(
-                    f"Running miceforest with {mice_iterations} iterations and kwargs: {mice_iter_kwargs}"
-                )
-                imp_kernel.mice(mice_iterations, **mice_iter_kwargs)
-                ts_cross_combined = imp_kernel.complete_data()
-            else:
-                logger.info(f"Running {type(self.imputer).__name__} imputation")
-                ts_cross_combined = DataFrame(
-                    self.imputer.fit_transform(ts_cross_combined),
-                    index=ts_cross_combined.index,
-                    columns=ts_cross_combined.columns,
-                )
+            logger.info(
+                "Running %s imputation",
+                "miceforest" if self.imputer == "mice" else type(self.imputer).__name__,
+            )
+            ts_cross_combined = impute_cross_sectional(
+                ts_cross_combined=ts_cross_combined,
+                imputer=self.imputer,
+                imputation_kwargs=self.imputation_kwargs,
+            )
             impute_time = time.perf_counter() - impute_start
             self.timings["imputation"] = impute_time
             if self.verbose:
@@ -732,53 +941,409 @@ class CrossSectionalClustering(BaseEstimator, ClusterMixin):
         plt.show()
 
 
-# TODO: for the categorisation of the clustering methods, use figure 6 of the paper; https://arxiv.org/html/2412.20582v1
-
-# TODO: add class for DistanceBasedClustering
-#
 class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
-    # integrates interpolation and smoothing with
-    # 1. existing distance based clustering methods from aeon, tslearn, etc.
-    # 2. custom distance based clustering
+    """Distance-based clustering wrapper for tslearn models.
+
+    Supports:
+    - TimeSeriesKMeans
+    - KernelKMeans
+    - KShape
+    - TimeSeriesDBSCAN
+    """
 
     def __init__(
         self,
+        method: Literal[
+            "timeserieskmeans",
+            "kernelkmeans",
+            "kshape",
+            "timeseriesdbscan",
+        ] = "timeserieskmeans",
         distance_metric: Literal[
-            "dtw", "ctw", "frechet", "softdtw_normalized", "euclidean", "precomputed"
+            "euclidean", "dtw", "softdtw", "sqeuclidean", "precomputed"
         ] = "euclidean",
-        backend: Literal["tslearn", "aeon", "sktime"] = "tslearn",
-        method: Literal["kmeans", "kmedoids", "kshapes", "kernelkmeans", "kasba"]
+        backend: Literal["tslearn"] = "tslearn",
+        n_clusters: int = 3,
+        random_state: int = 42,
+        model_kwargs: dict[str, Any] | None = None,
+        interpolation: bool = False,
+        interpolation_resolution: int = 1,
+        interpolation_keep_init: bool = False,
+        interpolation_kwargs: dict[str, Any] | None = None,
+        analysis_resolution: int = 1,
+        min_measurements_per_id: int = 1,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None,
+        smoothing: bool = False,
+        smoothing_type: Literal[
+            "gaussian_kernel", "gaussian_kernel_simple", "box_kernel", "rolling_mean"
+        ] = "gaussian_kernel",
+        smoothing_window_size: int = 4,
+        n_skip: int = 1,
+        smoothing_kwargs: dict[str, Any] | None = None,
+        imputation_method: Optional[
+            Literal[
+                "knn",
+                "iterative",
+                "miceforest",
+                "mean",
+                "median",
+                "most_frequent",
+                "constant",
+            ]
+        ] = None,
+        imputation_kwargs: dict[str, Any] | None = None,
+        normalise_timeseries: Optional[Literal["bulk", "group"]] = None,
+        normalisation_method: Optional[Literal["standard", "minmax"]] = "standard",
+        cross_standardisation: bool = False,
+        add_ts_meta: bool = False,
+        id_column: str = "id",
+        time_column: str = "time",
+        value_columns: Optional[List[str]] = None,
+        verbose: bool = False,
     ):
+        if backend != "tslearn":
+            raise ValueError("Only tslearn backend is currently supported")
+
+        self.method = method
         self.distance_metric = distance_metric
+        self.backend = backend
+        self.n_clusters = n_clusters
+        self.random_state = random_state
+        self.model_kwargs = model_kwargs or {}
 
-    def fit(self, X):
-        # assume pre-calculated distance matrix
-        self.clusters = ..
+        if analysis_resolution % interpolation_resolution != 0:
+            raise ValueError(
+                "Analysis resolution must be a multiple of interpolation resolution"
+            )
+        if max_time is not None and min_time is not None and max_time < min_time:
+            raise ValueError("max_time must be equal or greater than min_time")
 
-    def predict(self, X):
-        return self.clusters.labels_
+        self.interpolation = interpolation
+        self.interpolation_resolution = interpolation_resolution
+        self.interpolation_keep_init = interpolation_keep_init
+        self.interpolation_kwargs = interpolation_kwargs or {}
+        self.analysis_resolution = analysis_resolution
+        self.min_measurements_per_id = min_measurements_per_id
+        self.min_time = min_time
+        self.max_time = max_time
 
-class TSDensityBasedClustering(BaseEstimator, ClusterMixin):
-    # integrates interpolation and smoothing with
-    # 1. existing distance based clustering methods from aeon, tslearn, etc.
-    # 2. custom distance based clustering
+        self.smoothing = smoothing
+        self.smoothing_type = smoothing_type
+        self.smoothing_window_size = smoothing_window_size
+        self.n_skip = n_skip
+        self.smoothing_kwargs = smoothing_kwargs or {}
 
-    def __init__(
-        self,
-        distance_metric: Literal[
-            "dtw", "ctw", "frechet", "softdtw_normalized", "euclidean", "precomputed"
-        ] = "euclidean",
-        backend: Literal["tslearn", "aeon", "sktime"] = "tslearn",
-        method: Literal["dbscan",]
-    ):
-        self.distance_metric = distance_metric
+        self.imputation_method = imputation_method
+        self.imputation_kwargs = imputation_kwargs or {}
 
-    def fit(self, X):
-        # assume pre-calculated distance matrix
-        self.clusters = ..
+        self.normalise_timeseries = normalise_timeseries
+        self.normalisation_method = normalisation_method
+        self.cross_standardisation = cross_standardisation
+        self.add_ts_meta = add_ts_meta
 
-    def predict(self, X):
-        return self.clusters.labels_
+        self.id_column = id_column
+        self.time_column = time_column
+        self.value_columns = value_columns or ["value"]
+        if len(self.value_columns) == 0:
+            raise ValueError("value_columns must contain at least one column name")
+        self.verbose = verbose
+
+        self._imputer = (
+            build_imputer(
+                imputation_method=imputation_method,
+                imputation_kwargs=self.imputation_kwargs,
+                random_state=random_state,
+                verbose=verbose,
+            )
+            if imputation_method is not None
+            else None
+        )
+
+        self.clusterer = self._build_clusterer()
+        self.is_fitted = False
+
+    def _build_clusterer(self):
+        kwargs = dict(self.model_kwargs)
+
+        if self.method == "timeserieskmeans":
+            kwargs.setdefault("n_clusters", self.n_clusters)
+            kwargs.setdefault("metric", self.distance_metric)
+            kwargs.setdefault("random_state", self.random_state)
+            return tslearn_clustering.TimeSeriesKMeans(**kwargs)
+
+        if self.method == "kernelkmeans":
+            kwargs.setdefault("n_clusters", self.n_clusters)
+            kwargs.setdefault("random_state", self.random_state)
+            return tslearn_clustering.KernelKMeans(**kwargs)
+
+        if self.method == "kshape":
+            kwargs.setdefault("n_clusters", self.n_clusters)
+            kwargs.setdefault("random_state", self.random_state)
+            return tslearn_clustering.KShape(**kwargs)
+
+        if self.method == "timeseriesdbscan":
+            if not hasattr(tslearn_clustering, "TimeSeriesDBSCAN"):
+                raise ValueError(
+                    "TimeSeriesDBSCAN is not available in this tslearn version"
+                )
+            kwargs.setdefault("metric", self.distance_metric)
+            return tslearn_clustering.TimeSeriesDBSCAN(**kwargs)
+
+        raise ValueError(
+            "Invalid method. Choose from: "
+            "timeserieskmeans, kernelkmeans, kshape, timeseriesdbscan"
+        )
+
+    def _prepare_from_long_df(self, ts_df: DataFrame) -> tuple[ndarray, ndarray]:
+        base_cols = [self.id_column, self.time_column, *self.value_columns]
+        ts = ts_df[base_cols].copy()
+
+        filtered_for_meta: Optional[DataFrame] = None
+
+        processed_features: list[DataFrame] = []
+        for feature in self.value_columns:
+            feat_details = preprocess_timeseries_feature(
+                ts,
+                id_column=self.id_column,
+                time_column=self.time_column,
+                feature_column=feature,
+                min_measurements_per_id=self.min_measurements_per_id,
+                min_time=self.min_time,
+                max_time=self.max_time,
+                interpolation=self.interpolation,
+                interpolation_resolution=self.interpolation_resolution,
+                interpolation_keep_init=self.interpolation_keep_init,
+                interpolation_kwargs=self.interpolation_kwargs,
+                smoothing=self.smoothing,
+                smoothing_type=self.smoothing_type,
+                smoothing_window_size=self.smoothing_window_size,
+                n_skip=self.n_skip,
+                smoothing_kwargs=self.smoothing_kwargs,
+                analysis_resolution=self.analysis_resolution,
+                dropna_before_normalisation=False,
+                normalise_timeseries=self.normalise_timeseries,
+                normalisation_method=self.normalisation_method,
+                return_details=self.add_ts_meta,
+            )
+
+            if self.add_ts_meta:
+                feat_ts = feat_details["ts"]
+                if filtered_for_meta is None:
+                    filtered_for_meta = feat_details["stages"]["filtered"]
+            else:
+                feat_ts = feat_details
+
+            processed_features.append(
+                feat_ts[[self.id_column, self.time_column, feature]]
+            )
+
+        meta_df = None
+        if self.add_ts_meta and filtered_for_meta is not None:
+            time_diff = (
+                filtered_for_meta.groupby(self.id_column)[self.time_column]
+                .diff()
+                .groupby(filtered_for_meta[self.id_column])
+            )
+            meta_df = DataFrame(
+                {
+                    "NumMeas": filtered_for_meta.groupby(self.id_column).size(),
+                    "MaxTime": filtered_for_meta.groupby(self.id_column)[
+                        self.time_column
+                    ].max(),
+                    "MeanTimeDiff": time_diff.mean(),
+                    "TimeStdev": filtered_for_meta.groupby(self.id_column)[
+                        self.time_column
+                    ].std(),
+                }
+            ).fillna(0.0)
+
+        ts_processed = processed_features[0]
+        for feat_ts in processed_features[1:]:
+            ts_processed = ts_processed.merge(
+                feat_ts,
+                on=[self.id_column, self.time_column],
+                how="inner",
+            )
+
+        wide_per_feature: list[DataFrame] = []
+        base_index = None
+        base_columns = None
+        for feature in self.value_columns:
+            wide = (
+                ts_processed.pivot(
+                    index=self.id_column,
+                    columns=self.time_column,
+                    values=feature,
+                )
+                .sort_index(axis=0)
+                .sort_index(axis=1)
+            )
+
+            if self._imputer is not None and wide.isna().sum().sum() > 0:
+                wide = impute_cross_sectional(
+                    ts_cross_combined=wide,
+                    imputer=self._imputer,
+                    imputation_kwargs=self.imputation_kwargs,
+                )
+
+            if wide.isna().sum().sum() > 0:
+                raise ValueError(
+                    f"Feature '{feature}' contains NaNs after preprocessing. Enable imputation or provide denser data."
+                )
+
+            if base_index is None:
+                base_index = wide.index
+                base_columns = wide.columns
+            else:
+                wide = wide.reindex(index=base_index, columns=base_columns)
+
+            wide_per_feature.append(wide)
+
+        arr = np.stack([w.to_numpy(dtype=float) for w in wide_per_feature], axis=2)
+
+        if self.add_ts_meta and meta_df is not None:
+            meta_df = meta_df.reindex(base_index).fillna(0.0)
+            meta_vals = meta_df.to_numpy(dtype=float)
+            meta_vals = np.repeat(meta_vals[:, np.newaxis, :], arr.shape[1], axis=1)
+            arr = np.concatenate([arr, meta_vals], axis=2)
+
+        if self.cross_standardisation:
+            arr_flat = arr.reshape(arr.shape[0], -1)
+            arr_flat = StandardScaler().fit_transform(arr_flat)
+            arr = arr_flat.reshape(arr.shape)
+
+        return arr, base_index.to_numpy()
+
+    def _prepare_X(self, X: DataFrame | ndarray) -> tuple[ndarray, ndarray]:
+        if isinstance(X, DataFrame):
+            return self._prepare_from_long_df(X)
+
+        arr = np.asarray(X)
+        if arr.ndim == 2:
+            arr = arr[:, :, np.newaxis]
+        elif arr.ndim != 3:
+            raise ValueError("X must be a long DataFrame, 2D array, or 3D array")
+
+        if self.normalise_timeseries == "group":
+            if self.normalisation_method == "standard":
+                mean = arr.mean(axis=1, keepdims=True)
+                std = arr.std(axis=1, keepdims=True)
+                std[std == 0] = 1.0
+                arr = (arr - mean) / std
+            elif self.normalisation_method == "minmax":
+                mn = arr.min(axis=1, keepdims=True)
+                mx = arr.max(axis=1, keepdims=True)
+                denom = mx - mn
+                denom[denom == 0] = 1.0
+                arr = (arr - mn) / denom
+        elif self.normalise_timeseries == "bulk":
+            if self.normalisation_method == "standard":
+                mean = arr.mean(axis=(0, 1), keepdims=True)
+                std = arr.std(axis=(0, 1), keepdims=True)
+                std[std == 0] = 1.0
+                arr = (arr - mean) / std
+            elif self.normalisation_method == "minmax":
+                mn = arr.min(axis=(0, 1), keepdims=True)
+                mx = arr.max(axis=(0, 1), keepdims=True)
+                denom = mx - mn
+                denom[denom == 0] = 1.0
+                arr = (arr - mn) / denom
+
+        if self.cross_standardisation:
+            arr_flat = arr.reshape(arr.shape[0], -1)
+            arr_flat = StandardScaler().fit_transform(arr_flat)
+            arr = arr_flat.reshape(arr.shape)
+
+        if self.add_ts_meta:
+            raise ValueError("add_ts_meta requires long DataFrame input")
+
+        index = np.arange(arr.shape[0])
+        return arr, index
+
+    def fit(self, X: DataFrame | ndarray, y=None):
+        X_prepared, index = self._prepare_X(X)
+
+        if hasattr(self.clusterer, "fit_predict"):
+            labels = self.clusterer.fit_predict(X_prepared)
+        else:
+            self.clusterer.fit(X_prepared)
+            labels = getattr(self.clusterer, "labels_", None)
+
+        self.labels_ = labels
+        self.X_ = X_prepared
+        self.index_ = index
+        self.is_fitted = True
+        return self
+
+    def predict(self, X: Optional[DataFrame | ndarray] = None):
+        if not self.is_fitted:
+            raise ValueError("Model is not fitted")
+
+        if X is None:
+            if self.labels_ is None:
+                raise ValueError("Labels are not available for this clustering model")
+            return self.labels_
+
+        X_prepared, _ = self._prepare_X(X)
+        if hasattr(self.clusterer, "predict"):
+            return self.clusterer.predict(X_prepared)
+
+        raise ValueError("This clustering model does not support out-of-sample predict")
+
+    def viz(self):
+        if not self.is_fitted:
+            raise ValueError("Model is not fitted")
+
+        labels = self.labels_
+        if labels is None:
+            if hasattr(self.clusterer, "predict"):
+                labels = self.clusterer.predict(self.X_)
+            else:
+                raise ValueError("No labels available for visualization")
+
+        X_flat = self.X_.reshape(self.X_.shape[0], -1)
+        embedding = UMAP(n_components=2, random_state=self.random_state).fit_transform(
+            X_flat
+        )
+
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(
+            embedding[:, 0],
+            embedding[:, 1],
+            c=labels,
+            cmap="viridis",
+            alpha=0.7,
+        )
+        plt.colorbar(scatter)
+        plt.title("UMAP Visualization of Time-Series Clusters")
+        plt.xlabel("UMAP Component 1")
+        plt.ylabel("UMAP Component 2")
+        plt.show()
+
+        return embedding
+
+
+class TimeSeriesKMeansClustering(TSDistanceBasedClustering):
+    def __init__(self, **kwargs):
+        super().__init__(method="timeserieskmeans", **kwargs)
+
+
+class KernelKMeansClustering(TSDistanceBasedClustering):
+    def __init__(self, **kwargs):
+        super().__init__(method="kernelkmeans", **kwargs)
+
+
+class KShapeClustering(TSDistanceBasedClustering):
+    def __init__(self, **kwargs):
+        super().__init__(method="kshape", **kwargs)
+
+
+class TimeSeriesDBSCANClustering(TSDistanceBasedClustering):
+    def __init__(self, **kwargs):
+        super().__init__(method="timeseriesdbscan", **kwargs)
 
 
 # TODO: add class for ModelBasedClustering (Latent, Deeplearning)
