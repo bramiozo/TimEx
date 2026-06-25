@@ -960,7 +960,7 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
             "timeseriesdbscan",
         ] = "timeserieskmeans",
         distance_metric: Literal[
-            "euclidean", "dtw", "softdtw", "sqeuclidean", "precomputed"
+            "euclidean", "dtw", "softdtw", "precomputed"
         ] = "euclidean",
         backend: Literal["tslearn"] = "tslearn",
         n_clusters: int = 3,
