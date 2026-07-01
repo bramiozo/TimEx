@@ -954,11 +954,14 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
     def __init__(
         self,
         method: Literal[
-            "timeserieskmeans",
+            "kmeans",
             "kernelkmeans",
             "kshape",
-            "timeseriesdbscan",
-        ] = "timeserieskmeans",
+            "kmedoids",
+            "dbscan",
+            "kvisibility",
+            "stdbscan",
+        ] = "kmeans",
         distance_metric: Literal[
             "euclidean",
             "dtw",
@@ -1009,12 +1012,23 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         value_columns: Optional[List[str]] = None,
         verbose: bool = False,
     ):
+        assert method in [
+            "kmeans",
+            "kernelkmeans",
+            "kshape",
+            "kmedoids",
+            "dbscan",
+            "stdbscan",
+            "kvisibility",
+        ], (
+            f"We only support kmeans/kmedoids/dbscan/kernelkmeans/stdbscan and kshapes at the moment."
+        )
 
         acceptable_distance_metrics = {
             "backend": {
                 "tslearn": {
-                    "timeserieskmeans": ["euclidean", "softdtw", "dtw", "precomputed"],
-                    "timeseriesdbscan": [
+                    "kmeans": ["euclidean", "softdtw", "dtw", "precomputed"],
+                    "dbscan": [
                         "euclidean",
                         "dtw",
                         "ctw",
@@ -1034,10 +1048,10 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                         "sigmoid",
                         "cosine",
                     ],
-                    "KShape": [],
+                    "kshape": [],
                 },
                 "sktime": {
-                    "timeserieskmeans": [
+                    "kmeans": [
                         "dtw",
                         "euclidean",
                         "erp",
@@ -1048,7 +1062,7 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                         "wdtw",
                         "wddtw",
                     ],
-                    "timeserieskmedoids": [
+                    "kmedoids": [
                         "dtw",
                         "euclidean",
                         "erp",
@@ -1059,7 +1073,30 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                         "wdtw",
                         "wddtw",
                     ],
-                    "TimeSeriesKShapes": [],
+                    "dbscan": [
+                        "dtw",
+                        "euclidean",
+                        "erp",
+                        "edr",
+                        "lcss",
+                        "squared",
+                        "ddtw",
+                        "wdtw",
+                        "wddtw",
+                    ],
+                    "kvisibility": [],
+                    "stdbscan": [
+                        "euclidean",
+                        "manhattan",
+                        "chebyshev",
+                        "minkowski",
+                        "cosine",
+                        "haversine",
+                        "sqeuclidean",
+                        "jensenshannon",
+                        "canberra",
+                        "correlationbraycurtis",
+                    ],
                 },
             }
         }
@@ -1074,12 +1111,12 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         if (
             distance_metric
             not in acceptable_distance_metrics["backend"][backend][method]
-        ):
+        ) and (len(acceptable_distance_metrics["backend"][backend][method]) > 0):
             raise ValueError(
-                f"Only {list(acceptable_distance_metrics['backend'][backend][method])} are currently supported as metric for {backend}/{distance_metric}"
+                f"Only {list(acceptable_distance_metrics['backend'][backend][method])} are currently supported as metric for {backend}/{method}"
             )
 
-        self.method = method
+        self.method = method.lower()
         self.distance_metric = distance_metric
         self.backend = backend
         self.n_clusters = n_clusters
@@ -1143,7 +1180,7 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         if self.backend == "tslearn":
             from tslearn import clustering as tslearn_clustering
 
-            if self.method == "timeserieskmeans":
+            if self.method == "kmeans":
                 kwargs.setdefault("n_clusters", self.n_clusters)
                 kwargs.setdefault("metric", self.distance_metric)
                 kwargs.setdefault("random_state", self.random_state)
@@ -1162,7 +1199,7 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                 kwargs.setdefault("random_state", self.random_state)
                 return tslearn_clustering.KShape(**kwargs)
 
-            if self.method == "timeseriesdbscan":
+            if self.method == "dbscan":
                 if not hasattr(tslearn_clustering, "TimeSeriesDBSCAN"):
                     raise ValueError(
                         "TimeSeriesDBSCAN is not available in this tslearn version"
@@ -1172,27 +1209,41 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                 return tslearn_clustering.TimeSeriesDBSCAN(**kwargs)
 
             raise ValueError(
-                "Invalid method. Choose from: "
-                "timeserieskmeans, kernelkmeans, kshape, timeseriesdbscan"
+                "Invalid method. Choose from: kmeans, kernelkmeans, kshape, dbscan"
             )
         elif self.backend == "sktime":
             from sktime.clustering.k_means import TimeSeriesKMeans as SkTime_TSKMeans
             from sktime.clustering.k_medoids import (
                 TimeSeriesKMedoids as SkTime_TSKMedoids,
             )
+            from sktime.clustering.dbscan import TimeSeriesDBSCAN as SkTime_TSDBSCAN
+            from sktime.clustering.kvisibility import (
+                TimeSeriesKvisibility as SkTime_TSKViz,
+            )
+            from sktime.clustering.spatio_temporal import STDBSCAN
 
-            if self.method == "timeserieskmeans":
+            if self.method == "kmeans":
                 kwargs.setdefault("n_clusters", self.n_clusters)
                 kwargs.setdefault("metric", self.distance_metric)
                 kwargs.setdefault("random_state", self.random_state)
                 kwargs.setdefault("distance_params", self.metric_kwargs)
                 return SkTime_TSKMeans(**kwargs)
-            elif self.method == "timeserieskmedoids":
+            elif self.method == "kmedoids":
                 kwargs.setdefault("n_clusters", self.n_clusters)
                 kwargs.setdefault("metric", self.distance_metric)
                 kwargs.setdefault("random_state", self.random_state)
                 kwargs.setdefault("distance_params", self.metric_kwargs)
                 return SkTime_TSKMedoids(**kwargs)
+            elif self.method == "dbscan":
+                kwargs.setdefault("distance", self.distance_metric)
+                kwargs.setdefault("distance_params", self.metric_kwargs)
+                return SkTime_TSDBSCAN(**kwargs)
+            elif self.method == "kvisibility":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                return SkTime_TSKViz(**kwargs)
+            elif self.method == "stdbscan":
+                kwargs.setdefault("metric", self.distance_metric)
+                return STDBSCAN(**kwargs)
 
         raise ValueError("Invalid backend. Choose from: tslearn, sktime")
 
