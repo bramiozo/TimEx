@@ -37,7 +37,7 @@ from sklearn.cluster import (
 from hdbscan import HDBSCAN
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from tqdm import tqdm
-from tslearn import clustering as tslearn_clustering
+
 from umap import UMAP
 
 from timex import extractor, preprocessing
@@ -960,12 +960,20 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
             "timeseriesdbscan",
         ] = "timeserieskmeans",
         distance_metric: Literal[
-            "euclidean", "dtw", "softdtw", "precomputed"
+            "euclidean",
+            "dtw",
+            "softdtw",
+            "softdtw_normalized",
+            "precomputed",
+            "ctw",
+            "frechet",
+            "precomputed",
         ] = "euclidean",
-        backend: Literal["tslearn"] = "tslearn",
+        backend: Literal["tslearn", "sktime"] = "tslearn",
         n_clusters: int = 3,
         random_state: int = 42,
         model_kwargs: dict[str, Any] | None = None,
+        metric_kwargs: dict[str, Any] | None = None,
         interpolation: bool = False,
         interpolation_resolution: int = 1,
         interpolation_keep_init: bool = False,
@@ -996,14 +1004,80 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         normalise_timeseries: Optional[Literal["bulk", "group"]] = None,
         normalisation_method: Optional[Literal["standard", "minmax"]] = "standard",
         cross_standardisation: bool = False,
-        add_ts_meta: bool = False,
         id_column: str = "id",
         time_column: str = "time",
         value_columns: Optional[List[str]] = None,
         verbose: bool = False,
     ):
-        if backend != "tslearn":
-            raise ValueError("Only tslearn backend is currently supported")
+
+        acceptable_distance_metrics = {
+            "backend": {
+                "tslearn": {
+                    "timeserieskmeans": ["euclidean", "softdtw", "dtw", "precomputed"],
+                    "timeseriesdbscan": [
+                        "euclidean",
+                        "dtw",
+                        "ctw",
+                        "frechet",
+                        "softdtw_normalized",
+                        "precomputed",
+                    ],
+                    "kernelkmeans": [
+                        "gak",
+                        "additive_chi2",
+                        "chi2",
+                        "linear",
+                        "poly",
+                        "polynomial",
+                        "rbf",
+                        "laplacian",
+                        "sigmoid",
+                        "cosine",
+                    ],
+                    "KShape": [],
+                },
+                "sktime": {
+                    "timeserieskmeans": [
+                        "dtw",
+                        "euclidean",
+                        "erp",
+                        "edr",
+                        "lcss",
+                        "squared",
+                        "ddtw",
+                        "wdtw",
+                        "wddtw",
+                    ],
+                    "timeserieskmedoids": [
+                        "dtw",
+                        "euclidean",
+                        "erp",
+                        "edr",
+                        "lcss",
+                        "squared",
+                        "ddtw",
+                        "wdtw",
+                        "wddtw",
+                    ],
+                    "TimeSeriesKShapes": [],
+                },
+            }
+        }
+        if backend not in acceptable_distance_metrics["backend"].keys():
+            raise ValueError(
+                f"Only {list(acceptable_distance_metrics['backend'].keys())} are currently supported as a backend"
+            )
+        if method not in acceptable_distance_metrics["backend"][backend].keys():
+            raise ValueError(
+                f"Only {list(acceptable_distance_metrics['backend'][backend].keys())} are currently supported as methods for {backend}"
+            )
+        if (
+            distance_metric
+            not in acceptable_distance_metrics["backend"][backend][method]
+        ):
+            raise ValueError(
+                f"Only {list(acceptable_distance_metrics['backend'][backend][method])} are currently supported as metric for {backend}/{distance_metric}"
+            )
 
         self.method = method
         self.distance_metric = distance_metric
@@ -1011,6 +1085,7 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.model_kwargs = model_kwargs or {}
+        self.metric_kwargs = metric_kwargs or {}
 
         if analysis_resolution % interpolation_resolution != 0:
             raise ValueError(
@@ -1040,7 +1115,6 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
         self.normalise_timeseries = normalise_timeseries
         self.normalisation_method = normalisation_method
         self.cross_standardisation = cross_standardisation
-        self.add_ts_meta = add_ts_meta
 
         self.id_column = id_column
         self.time_column = time_column
@@ -1066,34 +1140,61 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
     def _build_clusterer(self):
         kwargs = dict(self.model_kwargs)
 
-        if self.method == "timeserieskmeans":
-            kwargs.setdefault("n_clusters", self.n_clusters)
-            kwargs.setdefault("metric", self.distance_metric)
-            kwargs.setdefault("random_state", self.random_state)
-            return tslearn_clustering.TimeSeriesKMeans(**kwargs)
+        if self.backend == "tslearn":
+            from tslearn import clustering as tslearn_clustering
 
-        if self.method == "kernelkmeans":
-            kwargs.setdefault("n_clusters", self.n_clusters)
-            kwargs.setdefault("random_state", self.random_state)
-            return tslearn_clustering.KernelKMeans(**kwargs)
+            if self.method == "timeserieskmeans":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                kwargs.setdefault("metric", self.distance_metric)
+                kwargs.setdefault("random_state", self.random_state)
+                kwargs.setdefault("metric_params", self.metric_kwargs)
+                return tslearn_clustering.TimeSeriesKMeans(**kwargs)
 
-        if self.method == "kshape":
-            kwargs.setdefault("n_clusters", self.n_clusters)
-            kwargs.setdefault("random_state", self.random_state)
-            return tslearn_clustering.KShape(**kwargs)
+            if self.method == "kernelkmeans":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                kwargs.setdefault("random_state", self.random_state)
+                kwargs.setdefault("kernel", self.distance_metric)
+                kwargs.setdefault("kernel_params", self.metric_kwargs)
+                return tslearn_clustering.KernelKMeans(**kwargs)
 
-        if self.method == "timeseriesdbscan":
-            if not hasattr(tslearn_clustering, "TimeSeriesDBSCAN"):
-                raise ValueError(
-                    "TimeSeriesDBSCAN is not available in this tslearn version"
-                )
-            kwargs.setdefault("metric", self.distance_metric)
-            return tslearn_clustering.TimeSeriesDBSCAN(**kwargs)
+            if self.method == "kshape":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                kwargs.setdefault("random_state", self.random_state)
+                return tslearn_clustering.KShape(**kwargs)
 
-        raise ValueError(
-            "Invalid method. Choose from: "
-            "timeserieskmeans, kernelkmeans, kshape, timeseriesdbscan"
-        )
+            if self.method == "timeseriesdbscan":
+                if not hasattr(tslearn_clustering, "TimeSeriesDBSCAN"):
+                    raise ValueError(
+                        "TimeSeriesDBSCAN is not available in this tslearn version"
+                    )
+                kwargs.setdefault("metric", self.distance_metric)
+                kwargs.setdefault("metric_params", self.metric_kwargs)
+                return tslearn_clustering.TimeSeriesDBSCAN(**kwargs)
+
+            raise ValueError(
+                "Invalid method. Choose from: "
+                "timeserieskmeans, kernelkmeans, kshape, timeseriesdbscan"
+            )
+        elif self.backend == "sktime":
+            from sktime.clustering.k_means import TimeSeriesKMeans as SkTime_TSKMeans
+            from sktime.clustering.k_medoids import (
+                TimeSeriesKMedoids as SkTime_TSKMedoids,
+            )
+
+            if self.method == "timeserieskmeans":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                kwargs.setdefault("metric", self.distance_metric)
+                kwargs.setdefault("random_state", self.random_state)
+                kwargs.setdefault("distance_params", self.metric_kwargs)
+                return SkTime_TSKMeans(**kwargs)
+            elif self.method == "timeserieskmedoids":
+                kwargs.setdefault("n_clusters", self.n_clusters)
+                kwargs.setdefault("metric", self.distance_metric)
+                kwargs.setdefault("random_state", self.random_state)
+                kwargs.setdefault("distance_params", self.metric_kwargs)
+                return SkTime_TSKMedoids(**kwargs)
+
+        raise ValueError("Invalid backend. Choose from: tslearn, sktime")
 
     def _prepare_from_long_df(self, ts_df: DataFrame) -> tuple[ndarray, ndarray]:
         base_cols = [self.id_column, self.time_column, *self.value_columns]
@@ -1124,39 +1225,14 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
                 dropna_before_normalisation=False,
                 normalise_timeseries=self.normalise_timeseries,
                 normalisation_method=self.normalisation_method,
-                return_details=self.add_ts_meta,
+                return_details=False,
             )
 
-            if self.add_ts_meta:
-                feat_ts = feat_details["ts"]
-                if filtered_for_meta is None:
-                    filtered_for_meta = feat_details["stages"]["filtered"]
-            else:
-                feat_ts = feat_details
+            feat_ts = feat_details
 
             processed_features.append(
                 feat_ts[[self.id_column, self.time_column, feature]]
             )
-
-        meta_df = None
-        if self.add_ts_meta and filtered_for_meta is not None:
-            time_diff = (
-                filtered_for_meta.groupby(self.id_column)[self.time_column]
-                .diff()
-                .groupby(filtered_for_meta[self.id_column])
-            )
-            meta_df = DataFrame(
-                {
-                    "NumMeas": filtered_for_meta.groupby(self.id_column).size(),
-                    "MaxTime": filtered_for_meta.groupby(self.id_column)[
-                        self.time_column
-                    ].max(),
-                    "MeanTimeDiff": time_diff.mean(),
-                    "TimeStdev": filtered_for_meta.groupby(self.id_column)[
-                        self.time_column
-                    ].std(),
-                }
-            ).fillna(0.0)
 
         ts_processed = processed_features[0]
         for feat_ts in processed_features[1:]:
@@ -1202,18 +1278,17 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
 
         arr = np.stack([w.to_numpy(dtype=float) for w in wide_per_feature], axis=2)
 
-        if self.add_ts_meta and meta_df is not None:
-            meta_df = meta_df.reindex(base_index).fillna(0.0)
-            meta_vals = meta_df.to_numpy(dtype=float)
-            meta_vals = np.repeat(meta_vals[:, np.newaxis, :], arr.shape[1], axis=1)
-            arr = np.concatenate([arr, meta_vals], axis=2)
-
         if self.cross_standardisation:
             arr_flat = arr.reshape(arr.shape[0], -1)
             arr_flat = StandardScaler().fit_transform(arr_flat)
             arr = arr_flat.reshape(arr.shape)
 
-        return arr, base_index.to_numpy()
+        if self.backend == "tslearn":
+            # expects  array with dimensions [n_instances, series_length, n_dimensions]
+            return arr, base_index.to_numpy()
+        elif self.backend == "sktime":
+            # expects  array with dimensions [n_instances, n_dimensions, series_length]
+            return np.einsum("ijk->ikj", arr), base_index.to_numpy()
 
     def _prepare_X(self, X: DataFrame | ndarray) -> tuple[ndarray, ndarray]:
         if isinstance(X, DataFrame):
@@ -1255,14 +1330,15 @@ class TSDistanceBasedClustering(BaseEstimator, ClusterMixin):
             arr_flat = StandardScaler().fit_transform(arr_flat)
             arr = arr_flat.reshape(arr.shape)
 
-        if self.add_ts_meta:
-            raise ValueError("add_ts_meta requires long DataFrame input")
-
         index = np.arange(arr.shape[0])
         return arr, index
 
     def fit(self, X: DataFrame | ndarray, y=None):
         X_prepared, index = self._prepare_X(X)
+
+        print(50 * "+")
+        print(f"Final shape of fit-matrix:{X_prepared.shape}")
+        print(50 * "+")
 
         if hasattr(self.clusterer, "fit_predict"):
             labels = self.clusterer.fit_predict(X_prepared)
