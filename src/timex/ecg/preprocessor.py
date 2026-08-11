@@ -40,7 +40,7 @@ Peak limiter: remove peaks above 3mV and below -3mV
 Wavelet denoising (db6)
 """
 
-# in wfdb.processing there is function xqrs_detect that detects QRS complexes, this can be seen as sentences 
+# in wfdb.processing there is function xqrs_detect that detects QRS complexes, this can be seen as sentences
 # if we consider the ECG signal as a text and the leads are paragraphs. I.e. we can use this idea to develop an hierarchical model
 
 class ECGSignalProcessor:
@@ -118,8 +118,8 @@ class ECGSignalProcessor:
         self.p_signal = savgol_filter(signal_np, window_length=window_length, polyorder=polyorder, axis=1)
 
 
-    def apply_detrend(self, 
-                        method: Literal['linear', 'poly', 'poly_np', 'MSTL', 'meeg', 'sliding_mean', 'sliding_median'] ='linear',
+    def apply_detrend(self,
+                        method: Literal['linear', 'poly', 'poly_np', 'MSTL', 'meeg', 'sliding_mean', 'sliding_median'] ='sliding_median',
                         order: int=3,
                         period: int=100,
                         windows: int=101,
@@ -149,7 +149,7 @@ class ECGSignalProcessor:
         elif method == 'meeg':
             '''
              Use sinusoids as basis functions:
-              This will suffer from the Gibbs-phenomenon. 
+              This will suffer from the Gibbs-phenomenon.
               To mitigate this, we have to cut the head/tail
             '''
             new_signal = np.zeros((self.p_signal.shape[0], self.p_signal.shape[1] - cutsize*2), np.float32)
@@ -158,19 +158,19 @@ class ECGSignalProcessor:
             self.p_signal = new_signal
         elif method == 'sliding_median':
             '''
-             Make base plot using sliding mean, subtract from raw 
+             Make base plot using sliding mean, subtract from raw
             '''
             new_signal = np.zeros((self.p_signal.shape[0], self.p_signal.shape[1] - median_window+1), np.float32)
-            for channel in range(self.p_signal.shape[0]): 
+            for channel in range(self.p_signal.shape[0]):
                 sl= np.median(np.lib.stride_tricks.sliding_window_view(signal_np[channel, :], (median_window,)), axis=1)
                 new_signal[channel, :] = signal_np[channel, median_window-1:] - sl
             self.p_signal = new_signal
         elif method == 'sliding_mean':
             '''
-             Make base plot using sliding mean, subtract from raw 
+             Make base plot using sliding mean, subtract from raw
             '''
             new_signal = np.zeros((self.p_signal.shape[0], self.p_signal.shape[1] - median_window+1), np.float32)
-            for channel in range(self.p_signal.shape[0]): 
+            for channel in range(self.p_signal.shape[0]):
                 sl= np.mean(np.lib.stride_tricks.sliding_window_view(signal_np[channel, :], (median_window,)), axis=1)
                 new_signal[channel, :] = signal_np[channel, median_window-1:] - sl
             self.p_signal = new_signal
@@ -178,13 +178,13 @@ class ECGSignalProcessor:
             raise ValueError(f"For now we only accept ['linear',' poly', 'poly_np', 'MSTL', 'meeg', 'sliding_median', 'sliding_mean']")
 
     def  standardize_sampling_rate(self,
-                                   backend: Literal['neurokit2', 'wfdb']='neurokit2', 
+                                   backend: Literal['neurokit2', 'wfdb']='neurokit2',
                                    method: Literal['interpolation', 'pandas', 'numpy', 'poly', 'fft']='fft',
                                    fs_target: int=500):
         '''
         Apply the wfdb resampler to the ECG signal
 
-        Args: 
+        Args:
             signal: np.array [channels, samples]
         '''
         assert(backend in ['neurokit2', 'wfdb']), f"backend should be one of {['neurokit2', 'wfdb']}"
@@ -202,8 +202,8 @@ class ECGSignalProcessor:
             s = s[:end_index,: ]
 
             try:
-                signal_resampled, _ = resample_sig(s, 
-                                                self.fs, 
+                signal_resampled, _ = resample_sig(s,
+                                                self.fs,
                                                 fs_target)
             except Exception as e:
                 print(e)
@@ -211,8 +211,8 @@ class ECGSignalProcessor:
             self.p_signal = np.transpose(signal_resampled)
         else:
             try:
-                self.p_signal = signal_resample(signal_np, 
-                                        sampling_rate=self.fs, 
+                self.p_signal = signal_resample(signal_np,
+                                        sampling_rate=self.fs,
                                         desired_sampling_rate=fs_target,
                                         method=method)
             except Exception as e:
@@ -233,7 +233,7 @@ class ECGSignalProcessor:
         for i in range(self.p_signal.shape[0]):
           peaks, _ = find_peaks(signal_np[i], distance=peak_distance, prominence=(prominence))
           dips, _ =  find_peaks(-signal_np[i], distance=dip_distance)
-          
+
           if len(peaks) == 0 or len(dips) == 0:
                 # If no peaks or dips found, keep the original signal
             new_signal[i, :] = signal_np[i, :]
