@@ -86,18 +86,18 @@ class ECGPretrainingDataset(Dataset):
         *,
         context_length: int,
         num_input_channels: int = 12,
-        target_sampling_rate: int = 500,
+        target_sampling_rate: int = 250,
         windows_per_record: int = 1,
         random_crop: bool = True,
         strict_num_input_channels: bool = True,
         apply_preprocessing: bool = True,
-        preprocessing_steps: Sequence[str] = ("detrend", "notch", "bandpass", "resample"),
+        preprocessing_steps: Sequence[str] = ("notch", "bandpass", "resample"),
         detrend_method: str = "sliding_median",
-        notch_freq: float | Sequence[float] = (50.0,),
+        notch_freq: float | Sequence[float] = (50.0, 60.0),
         notch_bandwidth: float = 1.0,
         bandpass_lowcut: float = 0.5,
-        bandpass_highcut: float = 40.0,
-        filter_order: int = 4,
+        bandpass_highcut: float = 100.0,
+        filter_order: int = 20,
         normalize_per_lead: bool = True,
         cache_records: bool = False,
     ) -> None:
@@ -303,34 +303,77 @@ class ECGPretrainingCollator:
         }
 
 
-def _resolve_muon_optimizer_class() -> tuple[type[torch.optim.Optimizer], str]:
+def _resolve_muon_optimizer_class(muon_class_path: str | None = None) -> tuple[type[torch.optim.Optimizer], str]:
     """
-    Try several known module paths for Muon optimizer and return (class, source).
+    Resolve Muon optimizer class.
+
+    Priority:
+    1) Explicit --muon_class_path as "module.submodule:ClassName"
+    2) Common module/class candidates
+    3) Heuristic scan for any class containing "muon" in known modules
     """
+
+    def _validate_optimizer_class(klass: Any, source: str) -> tuple[type[torch.optim.Optimizer], str]:
+        if not inspect.isclass(klass):
+            raise TypeError(f"Resolved object at {source} is not a class")
+        if not issubclass(klass, torch.optim.Optimizer):
+            raise TypeError(f"Resolved class at {source} is not a torch.optim.Optimizer subclass")
+        return klass, source
+
+    if muon_class_path:
+        if ":" not in muon_class_path:
+            raise ValueError(
+                "--muon_class_path must be in format 'module.submodule:ClassName', "
+                f"got: {muon_class_path}"
+            )
+        module_name, class_name = muon_class_path.split(":", 1)
+        module = importlib.import_module(module_name)
+        klass = getattr(module, class_name)
+        return _validate_optimizer_class(klass, f"{module_name}.{class_name}")
+
     candidates = [
         ("torch.optim", "Muon"),
         ("muon", "Muon"),
         ("muon_optimizer", "Muon"),
         ("optimizers.muon", "Muon"),
+        ("muon", "MuonWithAuxAdam"),
+        ("muon_optimizer", "MuonWithAuxAdam"),
     ]
 
     for module_name, class_name in candidates:
         try:
             module = importlib.import_module(module_name)
             klass = getattr(module, class_name)
-            return klass, f"{module_name}.{class_name}"
-        except (ImportError, AttributeError):
+            return _validate_optimizer_class(klass, f"{module_name}.{class_name}")
+        except (ImportError, AttributeError, TypeError):
             continue
+
+    heuristic_modules = ["muon", "muon_optimizer", "optimizers.muon", "torch.optim"]
+    for module_name in heuristic_modules:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+
+        for attr_name in dir(module):
+            if "muon" not in attr_name.lower():
+                continue
+            try:
+                candidate = getattr(module, attr_name)
+                return _validate_optimizer_class(candidate, f"{module_name}.{attr_name}")
+            except (TypeError, AttributeError):
+                continue
 
     tried = ", ".join([f"{m}.{c}" for m, c in candidates])
     raise ImportError(
-        "Requested optimizer 'muon' but no Muon class was found. "
-        f"Tried: {tried}. Install/provide a Muon optimizer implementation first."
+        "Requested optimizer 'muon' but no Muon optimizer class could be resolved. "
+        f"Tried explicit candidates: {tried}. "
+        "You can pass --muon_class_path module.submodule:ClassName to use your local implementation."
     )
 
 
 class ECGPretrainingTrainer(Trainer):
-    """Trainer with optional MUON optimizer and custom cyclic cosine+warmup scheduler."""
+    """Trainer with optional MUON optimizer, mixed masking, and custom cyclic cosine+warmup scheduler."""
 
     def __init__(
         self,
@@ -341,6 +384,11 @@ class ECGPretrainingTrainer(Trainer):
         cycle_warmup_steps: int = 0,
         cycle_warmup_ratio: float = 0.1,
         min_lr_ratio: float = 0.0,
+        muon_class_path: str | None = None,
+        force_eval_loss: bool = True,
+        mask_type: str = "random",
+        random_proba: float = 0.5,
+        forecast_proba: float = 0.5,
         **kwargs: Any,
     ) -> None:
         self.optimizer_name = optimizer_name.lower().strip()
@@ -349,7 +397,84 @@ class ECGPretrainingTrainer(Trainer):
         self.cycle_warmup_steps = int(cycle_warmup_steps)
         self.cycle_warmup_ratio = float(cycle_warmup_ratio)
         self.min_lr_ratio = float(min_lr_ratio)
+        self.muon_class_path = muon_class_path
+        self.force_eval_loss = bool(force_eval_loss)
+
+        self.mask_type = mask_type.lower().strip()
+        self.random_proba = float(random_proba)
+        self.forecast_proba = float(forecast_proba)
+
+        if self.mask_type == "mixed":
+            if self.random_proba < 0 or self.forecast_proba < 0:
+                raise ValueError("random_proba and forecast_proba must be >= 0 for mixed masking")
+            prob_sum = self.random_proba + self.forecast_proba
+            if prob_sum <= 0:
+                raise ValueError("random_proba + forecast_proba must be > 0 for mixed masking")
+            self.random_proba = self.random_proba / prob_sum
+            self.forecast_proba = self.forecast_proba / prob_sum
+
         super().__init__(*args, **kwargs)
+
+        # Self-supervised pretraining batches often have no explicit label keys.
+        # Force evaluation to still run compute_loss so eval_loss is logged.
+        if self.force_eval_loss:
+            self.can_return_loss = True
+
+    @staticmethod
+    def _set_model_mask_type(model: Any, mask_type: str) -> None:
+        """Best-effort update of PatchTST mask type on wrapped or unwrapped model objects."""
+        if mask_type not in {"random", "forecast"}:
+            raise ValueError(f"Unsupported mask_type override: {mask_type}")
+
+        model_ref = model.module if hasattr(model, "module") else model
+
+        if getattr(model_ref, "config", None) is not None:
+            model_ref.config.mask_type = mask_type
+
+        # Try a few likely nested locations.
+        nested_candidates = [
+            getattr(model_ref, "model", None),
+            getattr(model_ref, "patchtst", None),
+            getattr(getattr(model_ref, "model", None), "encoder", None),
+        ]
+        for candidate in nested_candidates:
+            if candidate is None:
+                continue
+            if getattr(candidate, "config", None) is not None:
+                candidate.config.mask_type = mask_type
+            if hasattr(candidate, "mask_type"):
+                candidate.mask_type = mask_type
+
+    def _sample_train_mask_type(self) -> str:
+        if self.mask_type != "mixed":
+            return self.mask_type
+        return "random" if random.random() < self.random_proba else "forecast"
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # For mixed masking: choose random/forecast per TRAIN batch.
+        # Keep eval deterministic by leaving the configured base mask type unchanged.
+        applied_override = False
+        prev_mask_type = None
+
+        if self.mask_type == "mixed" and model.training:
+            selected_mask_type = self._sample_train_mask_type()
+            model_ref = model.module if hasattr(model, "module") else model
+            prev_mask_type = getattr(getattr(model_ref, "config", None), "mask_type", None)
+            self._set_model_mask_type(model, selected_mask_type)
+            applied_override = True
+
+        try:
+            if num_items_in_batch is None:
+                return super().compute_loss(model, inputs, return_outputs=return_outputs)
+            return super().compute_loss(
+                model,
+                inputs,
+                return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
+            )
+        finally:
+            if applied_override and prev_mask_type in {"random", "forecast"}:
+                self._set_model_mask_type(model, prev_mask_type)
 
     def create_optimizer(self):
         if self.optimizer is not None:
@@ -358,7 +483,7 @@ class ECGPretrainingTrainer(Trainer):
         if self.optimizer_name != "muon":
             return super().create_optimizer()
 
-        muon_cls, source = _resolve_muon_optimizer_class()
+        muon_cls, source = _resolve_muon_optimizer_class(self.muon_class_path)
         LOGGER.info("Using MUON optimizer from %s", source)
 
         optim_kwargs: dict[str, Any] = {
@@ -434,6 +559,8 @@ def build_patchtst_model(args: argparse.Namespace) -> PatchTSTForPretraining:
         LOGGER.info("Loading PatchTSTForPretraining from %s", args.model_name_or_path)
         return PatchTSTForPretraining.from_pretrained(args.model_name_or_path)
 
+    base_mask_type = args.mask_type if args.mask_type in {"random", "forecast"} else "random"
+
     config_kwargs = {
         "num_input_channels": args.num_input_channels,
         "context_length": args.context_length,
@@ -445,10 +572,12 @@ def build_patchtst_model(args: argparse.Namespace) -> PatchTSTForPretraining:
         "ffn_dim": args.ffn_dim,
         "dropout": args.dropout,
         "head_dropout": args.head_dropout,
-        "mask_type": args.mask_type,
+        "mask_type": base_mask_type,
         "random_mask_ratio": args.random_mask_ratio,
         "num_forecast_mask_patches": args.num_forecast_mask_patches,
         "use_cls_token": args.use_cls_token,
+        "channel_attention": args.channel_attention,
+        "channel_consistent_masking": args.channel_consistent_masking,
     }
 
     supported_kwargs, dropped = _filter_supported_kwargs(PatchTSTConfig.__init__, config_kwargs)
@@ -554,6 +683,7 @@ def validate_records(
     hea_files: Sequence[Path],
     expected_num_channels: int,
     strict_num_input_channels: bool,
+    skip_invalid_num_input_channels: bool = True,
 ) -> list[Path]:
     usable: list[Path] = []
 
@@ -564,11 +694,12 @@ def validate_records(
             LOGGER.warning("Skipping unreadable record %s: %s", hea_path, exc)
             continue
 
-        if strict_num_input_channels and int(header.n_sig) != expected_num_channels:
+        n_sig = int(header.n_sig)
+        if n_sig != expected_num_channels and (skip_invalid_num_input_channels or strict_num_input_channels):
             LOGGER.warning(
                 "Skipping %s because n_sig=%s (expected %s)",
                 hea_path,
-                header.n_sig,
+                n_sig,
                 expected_num_channels,
             )
             continue
@@ -602,6 +733,12 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--windows_per_record", type=int, default=1)
     parser.add_argument("--random_crop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--strict_num_input_channels", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--skip_invalid_num_input_channels",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip ECG records whose n_sig != num_input_channels during validation.",
+    )
     parser.add_argument("--cache_records", action=argparse.BooleanOptionalAction, default=False)
 
     parser.add_argument("--apply_preprocessing", action=argparse.BooleanOptionalAction, default=True)
@@ -621,29 +758,53 @@ def make_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--notch_bandwidth", type=float, default=1.0)
     parser.add_argument("--bandpass_lowcut", type=float, default=0.05)
-    parser.add_argument("--bandpass_highcut", type=float, default=150.0)
+    parser.add_argument("--bandpass_highcut", type=float, default=100.0)
     parser.add_argument("--filter_order", type=int, default=20)
-    parser.add_argument("--normalize_per_lead", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--normalize_per_lead", action=argparse.BooleanOptionalAction, default=False)
 
     # PatchTST config
-    parser.add_argument("--patch_length", type=int, default=32)
-    parser.add_argument("--patch_stride", type=int, default=16)
-    parser.add_argument("--d_model", type=int, default=256)
-    parser.add_argument("--num_hidden_layers", type=int, default=4)
-    parser.add_argument("--num_attention_heads", type=int, default=8)
-    parser.add_argument("--ffn_dim", type=int, default=512)
-    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--patch_length", type=int, default=16)
+    parser.add_argument("--patch_stride", type=int, default=8)
+    parser.add_argument("--d_model", type=int, default=768)
+    parser.add_argument("--num_hidden_layers", type=int, default=16)
+    parser.add_argument("--num_attention_heads", type=int, default=12)
+    parser.add_argument("--ffn_dim", type=int, default=3840)
+    parser.add_argument("--dropout", type=float, default=0.15)
     parser.add_argument("--head_dropout", type=float, default=0.0)
-    parser.add_argument("--mask_type", type=str, default="random", choices=["random", "forecast"])
+    parser.add_argument(
+        "--mask_type",
+        type=str,
+        default="random",
+        choices=["random", "forecast", "mixed"],
+        help="Masking mode. 'mixed' samples random vs forecast per training batch.",
+    )
+    parser.add_argument(
+        "--random_proba",
+        type=float,
+        default=0.8,
+        help="When --mask_type mixed: probability of selecting random masking per train batch.",
+    )
+    parser.add_argument(
+        "--forecast_proba",
+        type=float,
+        default=0.2,
+        help="When --mask_type mixed: probability of selecting forecast masking per train batch.",
+    )
     parser.add_argument("--random_mask_ratio", type=float, default=0.4)
-    parser.add_argument("--num_forecast_mask_patches", type=int, default=64)
+    parser.add_argument("--num_forecast_mask_patches", type=int, default=10)
     parser.add_argument("--use_cls_token", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--channel_attention", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--channel_consistent_masking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
 
     # Trainer args
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--eval_batch_size", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--num_train_epochs", type=float, default=10)
+    parser.add_argument("--num_train_epochs", type=float, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument(
@@ -651,6 +812,15 @@ def make_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="adamw_torch",
         help="HF optimizer name (e.g. adamw_torch) or 'muon' for MUON optimizer.",
+    )
+    parser.add_argument(
+        "--muon_class_path",
+        type=str,
+        default=None,
+        help=(
+            "Optional explicit Muon class path in format module.submodule:ClassName, "
+            "e.g. mypkg.optim.muon:Muon"
+        ),
     )
     parser.add_argument(
         "--lr_scheduler_type",
@@ -734,6 +904,12 @@ def main(args: argparse.Namespace) -> None:
         if not (0.0 <= args.lr_min_ratio <= 1.0):
             raise ValueError("--lr_min_ratio must be in [0, 1]")
 
+    if args.mask_type == "mixed":
+        if args.random_proba < 0 or args.forecast_proba < 0:
+            raise ValueError("--random_proba and --forecast_proba must both be >= 0")
+        if (args.random_proba + args.forecast_proba) <= 0:
+            raise ValueError("--random_proba + --forecast_proba must be > 0")
+
     data_dir = Path(args.data_dir)
     hea_files = discover_hea_files(data_dir=data_dir, recursive=args.recursive)
 
@@ -749,6 +925,7 @@ def main(args: argparse.Namespace) -> None:
         hea_files,
         expected_num_channels=args.num_input_channels,
         strict_num_input_channels=args.strict_num_input_channels,
+        skip_invalid_num_input_channels=args.skip_invalid_num_input_channels,
     )
 
     if not hea_files:
@@ -826,6 +1003,15 @@ def main(args: argparse.Namespace) -> None:
         args.lr_scheduler_type,
         warmup_desc,
     )
+    if args.mask_type == "mixed":
+        prob_sum = args.random_proba + args.forecast_proba
+        LOGGER.info(
+            "Masking=mixed | random_proba=%.4f | forecast_proba=%.4f",
+            args.random_proba / prob_sum,
+            args.forecast_proba / prob_sum,
+        )
+    if args.optimizer.lower().strip() == "muon" and args.muon_class_path:
+        LOGGER.info("Using explicit Muon class path: %s", args.muon_class_path)
 
     callbacks = []
     if eval_dataset is not None and args.early_stopping_patience > 0:
@@ -844,6 +1030,10 @@ def main(args: argparse.Namespace) -> None:
         cycle_warmup_steps=args.cycle_warmup_steps,
         cycle_warmup_ratio=args.cycle_warmup_ratio,
         min_lr_ratio=args.lr_min_ratio,
+        muon_class_path=args.muon_class_path,
+        mask_type=args.mask_type,
+        random_proba=args.random_proba,
+        forecast_proba=args.forecast_proba,
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)

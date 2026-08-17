@@ -23,7 +23,7 @@ import re
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfilt
+from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfiltfilt
 
 from typing import Literal
 """
@@ -74,7 +74,7 @@ class ECGSignalProcessor:
         else:
             signal_np = self.p_signal
 
-        self.p_signal= np.array([sosfilt(sos, sig) for sig in self.p_signal], dtype='float32')
+        self.p_signal = np.array([sosfiltfilt(sos, sig) for sig in self.p_signal], dtype='float32')
 
 
     def apply_notch_filter(self, freq=60.0, bandwidth=1.0, order=4):
@@ -276,7 +276,7 @@ class ECGSignalProcessor:
 
         if 'dropout' in self.augmentations:
             # Lead dropout (randomly zero out leads to improve robustness)
-            if np.random.random() < 0.8:  # 10% chance
+            if np.random.random() < 0.05:  # 5% chance
                 lead_idx = np.random.randint(0, int(0.05*p_signal.shape[0]))
                 p_signal[lead_idx] = p_signal[lead_idx] * 0.0
 
