@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import inspect
+import json
 import logging
 import math
 import random
@@ -141,34 +142,14 @@ class ECGPretrainingDataset(Dataset):
         return len(self.hea_files) * self.windows_per_record
 
     def _fix_num_channels(self, signal: np.ndarray, hea_path: Path) -> np.ndarray:
-        n_channels, n_samples = signal.shape
+        n_channels, _ = signal.shape
 
-        if n_channels == self.num_input_channels:
-            return signal
-
-        if self.strict_num_input_channels:
+        if n_channels != self.num_input_channels:
             raise ValueError(
                 f"Record {hea_path} has {n_channels} channels, expected {self.num_input_channels}"
             )
 
-        if n_channels > self.num_input_channels:
-            LOGGER.warning(
-                "Record %s has %d channels; truncating to first %d",
-                hea_path,
-                n_channels,
-                self.num_input_channels,
-            )
-            return signal[: self.num_input_channels, :]
-
-        LOGGER.warning(
-            "Record %s has %d channels; zero-padding channels to %d",
-            hea_path,
-            n_channels,
-            self.num_input_channels,
-        )
-        out = np.zeros((self.num_input_channels, n_samples), dtype=np.float32)
-        out[:n_channels, :] = signal
-        return out
+        return signal
 
     def _load_and_preprocess_record(self, record_idx: int) -> torch.Tensor:
         hea_path = self.hea_files[record_idx]
@@ -288,6 +269,79 @@ class ECGPretrainingDataset(Dataset):
             "past_values": past_values,
             "past_observed_mask": past_observed_mask,
         }
+
+
+class ECGMemmapPretrainingDataset(Dataset):
+    """Read precomputed pretraining windows from memory-mapped arrays."""
+
+    def __init__(self, memmap_dir: Path, split: str, metadata: dict[str, Any]) -> None:
+        if split not in {"train", "eval"}:
+            raise ValueError(f"split must be 'train' or 'eval', got {split}")
+
+        self.memmap_dir = memmap_dir
+        self.split = split
+
+        values_file = metadata.get(f"{split}_past_values_file")
+        mask_file = metadata.get(f"{split}_past_observed_mask_file")
+        values_shape = metadata.get(f"{split}_past_values_shape")
+        mask_shape = metadata.get(f"{split}_past_observed_mask_shape")
+
+        if not values_file or not mask_file:
+            raise ValueError(f"Missing memmap file names for split={split} in metadata")
+        if not values_shape or not mask_shape:
+            raise ValueError(f"Missing memmap shapes for split={split} in metadata")
+
+        values_path = memmap_dir / values_file
+        mask_path = memmap_dir / mask_file
+        if not values_path.exists() or not mask_path.exists():
+            raise FileNotFoundError(
+                f"Memmap files for split={split} not found: {values_path} | {mask_path}"
+            )
+
+        self._past_values = np.memmap(
+            values_path,
+            mode="r",
+            dtype=np.float32,
+            shape=tuple(values_shape),
+        )
+        self._past_observed_mask = np.memmap(
+            mask_path,
+            mode="r",
+            dtype=np.float32,
+            shape=tuple(mask_shape),
+        )
+
+    def __len__(self) -> int:
+        return int(self._past_values.shape[0])
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        # Convert to writable contiguous arrays before tensor conversion.
+        past_values = torch.from_numpy(np.asarray(self._past_values[idx], dtype=np.float32).copy())
+        past_observed_mask = torch.from_numpy(
+            np.asarray(self._past_observed_mask[idx], dtype=np.float32).copy()
+        )
+        return {
+            "past_values": past_values,
+            "past_observed_mask": past_observed_mask,
+        }
+
+
+def load_memmap_datasets(memmap_dir: Path) -> tuple[Dataset, Dataset | None, dict[str, Any]]:
+    metadata_path = memmap_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing metadata.json in memmap directory: {memmap_dir}")
+
+    with metadata_path.open("r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    train_dataset = ECGMemmapPretrainingDataset(memmap_dir=memmap_dir, split="train", metadata=metadata)
+
+    eval_dataset = None
+    eval_size = int(metadata.get("eval_past_values_shape", [0])[0])
+    if eval_size > 0:
+        eval_dataset = ECGMemmapPretrainingDataset(memmap_dir=memmap_dir, split="eval", metadata=metadata)
+
+    return train_dataset, eval_dataset, metadata
 
 
 @dataclass
@@ -682,8 +736,6 @@ def build_training_args(args: argparse.Namespace, has_eval: bool) -> TrainingArg
 def validate_records(
     hea_files: Sequence[Path],
     expected_num_channels: int,
-    strict_num_input_channels: bool,
-    skip_invalid_num_input_channels: bool = True,
 ) -> list[Path]:
     usable: list[Path] = []
 
@@ -695,7 +747,7 @@ def validate_records(
             continue
 
         n_sig = int(header.n_sig)
-        if n_sig != expected_num_channels and (skip_invalid_num_input_channels or strict_num_input_channels):
+        if n_sig != expected_num_channels:
             LOGGER.warning(
                 "Skipping %s because n_sig=%s (expected %s)",
                 hea_path,
@@ -715,7 +767,14 @@ def make_arg_parser() -> argparse.ArgumentParser:
     )
 
     # Data
-    parser.add_argument("--data_dir", "--input_dir", dest="data_dir", type=str, required=True)
+    parser.add_argument(
+        "--data_dir",
+        "--input_dir",
+        dest="data_dir",
+        type=str,
+        default=None,
+        help="Directory containing .hea/.dat ECG records (required unless --memmap_dir is used).",
+    )
     parser.add_argument("--output_dir", type=str, default="output/hf_patchtst_pretraining")
     parser.add_argument("--recursive", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max_records", type=int, default=None)
@@ -732,14 +791,13 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target_sampling_rate", type=int, default=250)
     parser.add_argument("--windows_per_record", type=int, default=1)
     parser.add_argument("--random_crop", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--strict_num_input_channels", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument(
-        "--skip_invalid_num_input_channels",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Skip ECG records whose n_sig != num_input_channels during validation.",
-    )
     parser.add_argument("--cache_records", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--memmap_dir",
+        type=str,
+        default=None,
+        help="Optional directory containing precomputed memmap windows and metadata.json.",
+    )
 
     parser.add_argument("--apply_preprocessing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -910,60 +968,60 @@ def main(args: argparse.Namespace) -> None:
         if (args.random_proba + args.forecast_proba) <= 0:
             raise ValueError("--random_proba + --forecast_proba must be > 0")
 
-    data_dir = Path(args.data_dir)
-    hea_files = discover_hea_files(data_dir=data_dir, recursive=args.recursive)
+    memmap_metadata: dict[str, Any] | None = None
 
-    if args.max_records is not None:
-        hea_files = hea_files[: args.max_records]
+    if args.memmap_dir:
+        memmap_dir = Path(args.memmap_dir)
+        LOGGER.info("Loading precomputed memmap dataset from %s", memmap_dir)
+        train_dataset, eval_dataset, memmap_metadata = load_memmap_datasets(memmap_dir)
 
-    if not hea_files:
-        raise ValueError(f"No .hea files found in {data_dir}")
+        mm_channels = int(memmap_metadata.get("num_input_channels", args.num_input_channels))
+        mm_context = int(memmap_metadata.get("context_length", args.context_length))
+        if mm_channels != args.num_input_channels:
+            raise ValueError(
+                f"Memmap num_input_channels={mm_channels} does not match CLI --num_input_channels={args.num_input_channels}"
+            )
+        if mm_context != args.context_length:
+            LOGGER.warning(
+                "Memmap context_length=%s differs from CLI --context_length=%s; overriding CLI value.",
+                mm_context,
+                args.context_length,
+            )
+            args.context_length = mm_context
+    else:
+        if not args.data_dir:
+            raise ValueError("Provide --data_dir (or use --memmap_dir)")
 
-    LOGGER.info("Found %d candidate .hea files", len(hea_files))
+        data_dir = Path(args.data_dir)
+        hea_files = discover_hea_files(data_dir=data_dir, recursive=args.recursive)
 
-    hea_files = validate_records(
-        hea_files,
-        expected_num_channels=args.num_input_channels,
-        strict_num_input_channels=args.strict_num_input_channels,
-        skip_invalid_num_input_channels=args.skip_invalid_num_input_channels,
-    )
+        if args.max_records is not None:
+            hea_files = hea_files[: args.max_records]
 
-    if not hea_files:
-        raise ValueError("No usable .hea records after validation")
+        if not hea_files:
+            raise ValueError(f"No .hea files found in {data_dir}")
 
-    train_files, eval_files = split_train_eval(hea_files, val_ratio=args.val_ratio, seed=args.seed)
-    LOGGER.info("Using %d train records and %d eval records", len(train_files), len(eval_files))
+        LOGGER.info("Found %d candidate .hea files", len(hea_files))
 
-    train_dataset = ECGPretrainingDataset(
-        train_files,
-        context_length=args.context_length,
-        num_input_channels=args.num_input_channels,
-        target_sampling_rate=args.target_sampling_rate,
-        windows_per_record=args.windows_per_record,
-        random_crop=args.random_crop,
-        strict_num_input_channels=args.strict_num_input_channels,
-        apply_preprocessing=args.apply_preprocessing,
-        preprocessing_steps=args.preprocessing_steps,
-        detrend_method=args.detrend_method,
-        notch_freq=args.notch_freq,
-        notch_bandwidth=args.notch_bandwidth,
-        bandpass_lowcut=args.bandpass_lowcut,
-        bandpass_highcut=args.bandpass_highcut,
-        filter_order=args.filter_order,
-        normalize_per_lead=args.normalize_per_lead,
-        cache_records=args.cache_records,
-    )
+        hea_files = validate_records(
+            hea_files,
+            expected_num_channels=args.num_input_channels,
+        )
 
-    eval_dataset = None
-    if eval_files:
-        eval_dataset = ECGPretrainingDataset(
-            eval_files,
+        if not hea_files:
+            raise ValueError("No usable .hea records after validation")
+
+        train_files, eval_files = split_train_eval(hea_files, val_ratio=args.val_ratio, seed=args.seed)
+        LOGGER.info("Using %d train records and %d eval records", len(train_files), len(eval_files))
+
+        train_dataset = ECGPretrainingDataset(
+            train_files,
             context_length=args.context_length,
             num_input_channels=args.num_input_channels,
             target_sampling_rate=args.target_sampling_rate,
-            windows_per_record=1,
-            random_crop=False,
-            strict_num_input_channels=args.strict_num_input_channels,
+            windows_per_record=args.windows_per_record,
+            random_crop=args.random_crop,
+            strict_num_input_channels=True,
             apply_preprocessing=args.apply_preprocessing,
             preprocessing_steps=args.preprocessing_steps,
             detrend_method=args.detrend_method,
@@ -976,12 +1034,36 @@ def main(args: argparse.Namespace) -> None:
             cache_records=args.cache_records,
         )
 
+        eval_dataset = None
+        if eval_files:
+            eval_dataset = ECGPretrainingDataset(
+                eval_files,
+                context_length=args.context_length,
+                num_input_channels=args.num_input_channels,
+                target_sampling_rate=args.target_sampling_rate,
+                windows_per_record=1,
+                random_crop=False,
+                strict_num_input_channels=True,
+                apply_preprocessing=args.apply_preprocessing,
+                preprocessing_steps=args.preprocessing_steps,
+                detrend_method=args.detrend_method,
+                notch_freq=args.notch_freq,
+                notch_bandwidth=args.notch_bandwidth,
+                bandpass_lowcut=args.bandpass_lowcut,
+                bandpass_highcut=args.bandpass_highcut,
+                filter_order=args.filter_order,
+                normalize_per_lead=args.normalize_per_lead,
+                cache_records=args.cache_records,
+            )
+
     model = build_model(args)
 
     # Persist effective preprocessing settings into model config.json
     preprocessing_cfg = build_preprocessing_config(args)
     if getattr(model, "config", None) is not None:
         model.config.timex_preprocessing = preprocessing_cfg
+        if memmap_metadata is not None:
+            model.config.timex_memmap_metadata = memmap_metadata
         LOGGER.info("Attached preprocessing settings to model config under key: timex_preprocessing")
 
     training_args = build_training_args(args, has_eval=eval_dataset is not None)
