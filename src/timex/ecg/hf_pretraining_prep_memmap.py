@@ -12,6 +12,7 @@ from transformers import set_seed
 
 from timex.ecg.hf_pretraining import (
     ECGPretrainingDataset,
+    context_length_ms_to_samples,
     discover_hea_files,
     split_train_eval,
     validate_records,
@@ -107,7 +108,13 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=False)
 
     parser.add_argument("--num_input_channels", type=int, default=12)
-    parser.add_argument("--context_length", type=int, default=5000)
+    parser.add_argument("--context_length_ms", type=int, default=3000)
+    parser.add_argument(
+        "--context_length",
+        type=int,
+        default=None,
+        help="Deprecated: context length in samples/ticks. Prefer --context_length_ms.",
+    )
     parser.add_argument("--target_sampling_rate", type=int, default=250)
 
     parser.add_argument("--train_windows_per_record", type=int, default=1)
@@ -147,6 +154,25 @@ def main(args: argparse.Namespace) -> None:
         raise ValueError("--train_windows_per_record must be > 0")
     if args.eval_windows_per_record <= 0:
         raise ValueError("--eval_windows_per_record must be > 0")
+
+    if args.context_length is not None:
+        if args.context_length <= 0:
+            raise ValueError("--context_length must be > 0")
+        LOGGER.warning("--context_length is deprecated; prefer --context_length_ms")
+        args.context_length = int(args.context_length)
+        args.context_length_ms = int(round(1000.0 * args.context_length / float(args.target_sampling_rate)))
+    else:
+        args.context_length = context_length_ms_to_samples(
+            context_length_ms=int(args.context_length_ms),
+            target_sampling_rate=int(args.target_sampling_rate),
+        )
+
+    LOGGER.info(
+        "Preparing memmap with context_length=%d samples (from %d ms at %d Hz)",
+        args.context_length,
+        args.context_length_ms,
+        args.target_sampling_rate,
+    )
 
     output_dir = Path(args.output_dir)
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
@@ -235,6 +261,7 @@ def main(args: argparse.Namespace) -> None:
         "format_version": 1,
         "dtype": "float32",
         "context_length": args.context_length,
+        "context_length_ms": args.context_length_ms,
         "num_input_channels": args.num_input_channels,
         "target_sampling_rate": args.target_sampling_rate,
         "train_records": len(train_files),

@@ -211,13 +211,32 @@ class ECGSignalProcessor:
             self.p_signal = np.transpose(signal_resampled)
         else:
             try:
-                self.p_signal = signal_resample(signal_np,
-                                        sampling_rate=self.fs,
-                                        desired_sampling_rate=fs_target,
-                                        method=method)
+                # neurokit2 resampling on 2D arrays can resample the wrong axis.
+                # Always resample each lead independently to preserve [channels, samples].
+                if signal_np.ndim == 1:
+                    self.p_signal = signal_resample(
+                        signal_np,
+                        sampling_rate=self.fs,
+                        desired_sampling_rate=fs_target,
+                        method=method,
+                    )
+                elif signal_np.ndim == 2:
+                    self.p_signal = np.array([
+                        signal_resample(
+                            signal_np[ch],
+                            sampling_rate=self.fs,
+                            desired_sampling_rate=fs_target,
+                            method=method,
+                        )
+                        for ch in range(signal_np.shape[0])
+                    ], dtype=np.float32)
+                else:
+                    raise ValueError(f"Expected 1D or 2D signal, got ndim={signal_np.ndim}")
             except Exception as e:
                 print(e)
                 raise ValueError(f" resampling failed for {self.p_signal.shape} with fs {self.fs} and fs_target {fs_target}")
+
+        self.fs = fs_target
 
     def trim_signal(self, peak_distance=30, dip_distance=250, prominence=0.1):
         trim_signals = []

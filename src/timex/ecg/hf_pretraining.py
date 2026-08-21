@@ -30,6 +30,16 @@ from timex.ecg.preprocessor import ECGSignalProcessor
 LOGGER = logging.getLogger(__name__)
 
 
+def context_length_ms_to_samples(context_length_ms: int, target_sampling_rate: int) -> int:
+    if context_length_ms <= 0:
+        raise ValueError("context_length_ms must be > 0")
+    if target_sampling_rate <= 0:
+        raise ValueError("target_sampling_rate must be > 0")
+
+    samples = int(round((float(context_length_ms) / 1000.0) * float(target_sampling_rate)))
+    return max(1, samples)
+
+
 def _record_base_path(hea_path: Path) -> str:
     """Return WFDB record path without extension for rdrecord/rdheader."""
     return str(hea_path.with_suffix(""))
@@ -93,7 +103,7 @@ class ECGPretrainingDataset(Dataset):
         strict_num_input_channels: bool = True,
         apply_preprocessing: bool = True,
         preprocessing_steps: Sequence[str] = ("notch", "bandpass", "resample"),
-        detrend_method: str = "sliding_median",
+        detrend_method: Optional[str] = "sliding_median",
         notch_freq: float | Sequence[float] = (50.0, 60.0),
         notch_bandwidth: float = 1.0,
         bandpass_lowcut: float = 0.5,
@@ -200,7 +210,8 @@ class ECGPretrainingDataset(Dataset):
                     )
 
             if "resample" in self.preprocessing_steps and fs != self.target_sampling_rate:
-                proc.standardize_sampling_rate(fs_target=self.target_sampling_rate)
+                # Use wfdb backend to reliably preserve [channels, samples] shape.
+                proc.standardize_sampling_rate(backend="wfdb", fs_target=self.target_sampling_rate)
 
             x = proc.get()  # [channels, samples]
         else:
@@ -787,7 +798,13 @@ def make_arg_parser() -> argparse.ArgumentParser:
 
     # Input shape / preprocessing
     parser.add_argument("--num_input_channels", type=int, default=12)
-    parser.add_argument("--context_length", type=int, default=5000)
+    parser.add_argument("--context_length_ms", type=int, default=3000)
+    parser.add_argument(
+        "--context_length",
+        type=int,
+        default=None,
+        help="Deprecated: context length in samples/ticks. Prefer --context_length_ms.",
+    )
     parser.add_argument("--target_sampling_rate", type=int, default=250)
     parser.add_argument("--windows_per_record", type=int, default=1)
     parser.add_argument("--random_crop", action=argparse.BooleanOptionalAction, default=True)
@@ -806,7 +823,7 @@ def make_arg_parser() -> argparse.ArgumentParser:
         default=["notch", "bandpass", "resample"],
         help="Any subset of: detrend notch bandpass resample",
     )
-    parser.add_argument("--detrend_method", type=str, default="linear")
+    parser.add_argument("--detrend_method", type=str, default='sliding_median')
     parser.add_argument(
         "--notch_freq",
         type=float,
@@ -968,6 +985,25 @@ def main(args: argparse.Namespace) -> None:
         if (args.random_proba + args.forecast_proba) <= 0:
             raise ValueError("--random_proba + --forecast_proba must be > 0")
 
+    if args.context_length is not None:
+        if args.context_length <= 0:
+            raise ValueError("--context_length must be > 0")
+        LOGGER.warning("--context_length is deprecated; prefer --context_length_ms")
+        args.context_length = int(args.context_length)
+        args.context_length_ms = int(round(1000.0 * args.context_length / float(args.target_sampling_rate)))
+    else:
+        args.context_length = context_length_ms_to_samples(
+            context_length_ms=int(args.context_length_ms),
+            target_sampling_rate=int(args.target_sampling_rate),
+        )
+
+    LOGGER.info(
+        "Using context_length=%d samples (from %d ms at %d Hz)",
+        args.context_length,
+        args.context_length_ms,
+        args.target_sampling_rate,
+    )
+
     memmap_metadata: dict[str, Any] | None = None
 
     if args.memmap_dir:
@@ -977,17 +1013,35 @@ def main(args: argparse.Namespace) -> None:
 
         mm_channels = int(memmap_metadata.get("num_input_channels", args.num_input_channels))
         mm_context = int(memmap_metadata.get("context_length", args.context_length))
+        mm_context_ms = int(
+            memmap_metadata.get(
+                "context_length_ms",
+                round(1000.0 * mm_context / float(args.target_sampling_rate)),
+            )
+        )
+        mm_fs = memmap_metadata.get("target_sampling_rate", None)
+
         if mm_channels != args.num_input_channels:
             raise ValueError(
                 f"Memmap num_input_channels={mm_channels} does not match CLI --num_input_channels={args.num_input_channels}"
             )
+
+        if mm_fs is not None and int(mm_fs) != int(args.target_sampling_rate):
+            LOGGER.warning(
+                "Memmap target_sampling_rate=%s differs from CLI --target_sampling_rate=%s; overriding CLI value.",
+                mm_fs,
+                args.target_sampling_rate,
+            )
+            args.target_sampling_rate = int(mm_fs)
+
         if mm_context != args.context_length:
             LOGGER.warning(
-                "Memmap context_length=%s differs from CLI --context_length=%s; overriding CLI value.",
+                "Memmap context_length=%s differs from CLI context_length=%s; overriding CLI value.",
                 mm_context,
                 args.context_length,
             )
             args.context_length = mm_context
+            args.context_length_ms = mm_context_ms
     else:
         if not args.data_dir:
             raise ValueError("Provide --data_dir (or use --memmap_dir)")
