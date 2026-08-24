@@ -108,7 +108,7 @@ class ECGPretrainingDataset(Dataset):
         notch_bandwidth: float = 1.0,
         bandpass_lowcut: float = 0.5,
         bandpass_highcut: float = 100.0,
-        filter_order: int = 20,
+        filter_order: int = 7,
         normalize_per_lead: bool = True,
         cache_records: bool = False,
     ) -> None:
@@ -213,9 +213,14 @@ class ECGPretrainingDataset(Dataset):
                 # Use wfdb backend to reliably preserve [channels, samples] shape.
                 proc.standardize_sampling_rate(backend="wfdb", fs_target=self.target_sampling_rate)
 
-            x = proc.get()  # [channels, samples]
+            x = proc.get()  # expected [channels, samples]
         else:
             x = torch.tensor(signal, dtype=torch.float32)
+
+        if x.ndim != 2:
+            raise ValueError(
+                f"Preprocessing produced shape {tuple(x.shape)} for record {hea_path}; expected 2D [channels, samples]"
+            )
 
         x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -834,7 +839,7 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--notch_bandwidth", type=float, default=1.0)
     parser.add_argument("--bandpass_lowcut", type=float, default=0.05)
     parser.add_argument("--bandpass_highcut", type=float, default=100.0)
-    parser.add_argument("--filter_order", type=int, default=20)
+    parser.add_argument("--filter_order", type=int, default=7)
     parser.add_argument("--normalize_per_lead", action=argparse.BooleanOptionalAction, default=False)
 
     # PatchTST config
@@ -1171,6 +1176,20 @@ def main(args: argparse.Namespace) -> None:
         random_proba=args.random_proba,
         forecast_proba=args.forecast_proba,
     )
+
+    device = trainer.args.device
+    if getattr(device, "type", "") == "cuda" and torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        current_idx = torch.cuda.current_device()
+        gpu_name = torch.cuda.get_device_name(current_idx)
+        LOGGER.info(
+            "Training with GPU: %s (cuda:%d) | visible_gpus=%d",
+            gpu_name,
+            current_idx,
+            gpu_count,
+        )
+    else:
+        LOGGER.info("Training on device: %s", device)
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 

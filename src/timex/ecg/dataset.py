@@ -367,7 +367,7 @@ class ECGDataset(Dataset):
         # resampler: Resample to a standard sampling rate
         if 'resampler' in self.preprocessing:
             # print("Processing: re-sampler...", flush=True)
-            ecg_preprocessor.standardize_sampling_rate(fs_target=self.config.SAMPLING_RATE)
+            ecg_preprocessor.standardize_sampling_rate(backend='wfdb', fs_target=self.config.SAMPLING_RATE)
             signal = ecg_preprocessor.get()
             
         # standardscaler: Standardizesignal

@@ -23,7 +23,7 @@ import re
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.signal import find_peaks, butter, filtfilt, detrend, savgol_filter, sosfiltfilt
+from scipy.signal import find_peaks, butter, detrend, savgol_filter, sosfiltfilt
 
 from typing import Literal
 """
@@ -64,30 +64,43 @@ class ECGSignalProcessor:
           self.peaks, _ = find_peaks(self.p_signal[i], distance=30, prominence=(0.1))
           self.dips, _ = find_peaks(-self.p_signal[i], distance=250)
 
-    def apply_bandpass_filter(self, lowcut=0.5, highcut=40.0, order=4):
+    def apply_bandpass_filter(self, lowcut=0.5, highcut=40.0, order=7):
         nyq = 0.5 * self.fs
         sos = butter(order, [lowcut / nyq, highcut / nyq], btype='band', output='sos')
 
         # Convert if needed
         if isinstance(self.p_signal, torch.Tensor):
-            signal_np = self.p_signal.numpy()
+            signal_np = self.p_signal.detach().cpu().numpy()
         else:
-            signal_np = self.p_signal
+            signal_np = np.asarray(self.p_signal)
 
-        self.p_signal = np.array([sosfiltfilt(sos, sig) for sig in self.p_signal], dtype='float32')
+        filtered = np.array([sosfiltfilt(sos, sig.astype(np.float64)) for sig in signal_np], dtype=np.float64)
+        filtered = np.nan_to_num(filtered, nan=0.0, posinf=0.0, neginf=0.0)
+        self.p_signal = filtered.astype(np.float32)
 
 
-    def apply_notch_filter(self, freq=60.0, bandwidth=1.0, order=4):
+    def apply_notch_filter(self, freq=60.0, bandwidth=1.0, order=7):
         nyq = 0.5 * self.fs
-        b, a = butter(order, [(freq - bandwidth) / nyq, (freq + bandwidth) / nyq], btype='bandstop')
+        low = (freq - bandwidth) / nyq
+        high = (freq + bandwidth) / nyq
+
+        if low <= 0 or high >= 1:
+            raise ValueError(
+                f"Invalid notch band for fs={self.fs}: ({freq-bandwidth}, {freq+bandwidth}) Hz"
+            )
+
+        # SOS form is numerically much more stable than (b, a), especially for higher orders.
+        sos = butter(order, [low, high], btype='bandstop', output='sos')
 
         # Convert if needed
         if isinstance(self.p_signal, torch.Tensor):
-            signal_np = self.p_signal.numpy()
+            signal_np = self.p_signal.detach().cpu().numpy()
         else:
-            signal_np = self.p_signal
+            signal_np = np.asarray(self.p_signal)
 
-        self.p_signal = np.array([filtfilt(b, a, sig) for sig in self.p_signal], dtype='float32')
+        filtered = np.array([sosfiltfilt(sos, sig.astype(np.float64)) for sig in signal_np], dtype=np.float64)
+        filtered = np.nan_to_num(filtered, nan=0.0, posinf=0.0, neginf=0.0)
+        self.p_signal = filtered.astype(np.float32)
 
 
     def apply_savgol_filter(self, window_length=31, polyorder=3):
@@ -178,63 +191,67 @@ class ECGSignalProcessor:
             raise ValueError(f"For now we only accept ['linear',' poly', 'poly_np', 'MSTL', 'meeg', 'sliding_median', 'sliding_mean']")
 
     def  standardize_sampling_rate(self,
-                                   backend: Literal['neurokit2', 'wfdb']='neurokit2',
+                                   backend: Literal['neurokit2', 'wfdb']='wfdb', 
                                    method: Literal['interpolation', 'pandas', 'numpy', 'poly', 'fft']='fft',
                                    fs_target: int=500):
         '''
-        Apply the wfdb resampler to the ECG signal
+        Resample ECG signal while preserving [channels, samples] shape.
 
-        Args:
-            signal: np.array [channels, samples]
+        Args: 
+            signal: np.array [channels, samples] or [samples]
         '''
         assert(backend in ['neurokit2', 'wfdb']), f"backend should be one of {['neurokit2', 'wfdb']}"
         assert(method in ['interpolation', 'numpy', 'poly', 'fft']), f"method should be on of {['interpolation', 'numpy', 'poly', 'fft']}"
 
         if isinstance(self.p_signal, torch.Tensor):
-            signal_np = self.p_signal.numpy()
+            signal_np = self.p_signal.detach().cpu().numpy()
         else:
-            signal_np = self.p_signal
+            signal_np = np.asarray(self.p_signal)
 
-
-        if backend == 'wfdb':
-            s = np.transpose(signal_np)
-            end_index = s.shape[0] - s.shape[0] % 2 # needs even indices?
-            s = s[:end_index,: ]
-
-            try:
-                signal_resampled, _ = resample_sig(s,
-                                                self.fs,
-                                                fs_target)
-            except Exception as e:
-                print(e)
-                raise ValueError(f" resampling failed for {s.shape} with fs {self.fs} and fs_target {fs_target}")
-            self.p_signal = np.transpose(signal_resampled)
-        else:
-            try:
-                # neurokit2 resampling on 2D arrays can resample the wrong axis.
-                # Always resample each lead independently to preserve [channels, samples].
-                if signal_np.ndim == 1:
-                    self.p_signal = signal_resample(
-                        signal_np,
-                        sampling_rate=self.fs,
-                        desired_sampling_rate=fs_target,
-                        method=method,
-                    )
-                elif signal_np.ndim == 2:
-                    self.p_signal = np.array([
+        try:
+            if signal_np.ndim == 1:
+                if backend == 'wfdb':
+                    resampled, _ = resample_sig(signal_np, self.fs, fs_target)
+                    self.p_signal = np.asarray(resampled, dtype=np.float32)
+                else:
+                    self.p_signal = np.asarray(
                         signal_resample(
-                            signal_np[ch],
+                            signal_np,
+                            sampling_rate=self.fs,
+                            desired_sampling_rate=fs_target,
+                            method=method,
+                        ),
+                        dtype=np.float32,
+                    )
+
+            elif signal_np.ndim == 2:
+                # Always resample lead-by-lead so channel dimension is never altered.
+                resampled_channels = []
+                for ch in range(signal_np.shape[0]):
+                    one_lead = signal_np[ch]
+                    if backend == 'wfdb':
+                        one_rs, _ = resample_sig(one_lead, self.fs, fs_target)
+                    else:
+                        one_rs = signal_resample(
+                            one_lead,
                             sampling_rate=self.fs,
                             desired_sampling_rate=fs_target,
                             method=method,
                         )
-                        for ch in range(signal_np.shape[0])
-                    ], dtype=np.float32)
-                else:
-                    raise ValueError(f"Expected 1D or 2D signal, got ndim={signal_np.ndim}")
-            except Exception as e:
-                print(e)
-                raise ValueError(f" resampling failed for {self.p_signal.shape} with fs {self.fs} and fs_target {fs_target}")
+                    resampled_channels.append(np.asarray(one_rs, dtype=np.float32))
+
+                # Ensure equal length across channels (defensive trim to min length).
+                min_len = min(len(ch_arr) for ch_arr in resampled_channels)
+                self.p_signal = np.stack([ch_arr[:min_len] for ch_arr in resampled_channels], axis=0).astype(np.float32)
+
+            else:
+                raise ValueError(f"Expected 1D or 2D signal, got ndim={signal_np.ndim}")
+
+        except Exception as e:
+            print(e)
+            raise ValueError(
+                f"resampling failed for shape {signal_np.shape} with fs {self.fs} and fs_target {fs_target}"
+            )
 
         self.fs = fs_target
 

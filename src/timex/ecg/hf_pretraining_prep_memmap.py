@@ -139,7 +139,7 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--notch_bandwidth", type=float, default=1.0)
     parser.add_argument("--bandpass_lowcut", type=float, default=0.05)
     parser.add_argument("--bandpass_highcut", type=float, default=100.0)
-    parser.add_argument("--filter_order", type=int, default=20)
+    parser.add_argument("--filter_order", type=int, default=7)
     parser.add_argument("--normalize_per_lead", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cache_records", action=argparse.BooleanOptionalAction, default=True)
 
