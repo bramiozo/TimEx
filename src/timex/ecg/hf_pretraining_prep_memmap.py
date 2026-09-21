@@ -33,6 +33,7 @@ def _build_preprocessing_config(args: argparse.Namespace) -> dict[str, Any]:
         "filter_order": args.filter_order,
         "target_sampling_rate": args.target_sampling_rate,
         "normalize_per_lead": args.normalize_per_lead,
+        "min_signal_len_samples": args.min_signal_len_samples,
     }
 
 
@@ -116,6 +117,12 @@ def make_arg_parser() -> argparse.ArgumentParser:
         help="Deprecated: context length in samples/ticks. Prefer --context_length_ms.",
     )
     parser.add_argument("--target_sampling_rate", type=int, default=250)
+    parser.add_argument(
+        "--min_signal_len_samples",
+        type=int,
+        default=2000,
+        help="Skip ECG records shorter than this many samples.",
+    )
 
     parser.add_argument("--train_windows_per_record", type=int, default=1)
     parser.add_argument("--eval_windows_per_record", type=int, default=1)
@@ -192,7 +199,19 @@ def main(args: argparse.Namespace) -> None:
 
     LOGGER.info("Found %d candidate .hea files", len(hea_files))
 
-    hea_files = validate_records(hea_files, expected_num_channels=args.num_input_channels)
+    hea_files = validate_records(
+        hea_files,
+        expected_num_channels=args.num_input_channels,
+        min_signal_len_samples=args.min_signal_len_samples,
+        apply_preprocessing=args.apply_preprocessing,
+        preprocessing_steps=args.preprocessing_steps,
+        detrend_method=args.detrend_method,
+        notch_freqs=args.notch_freq,
+        notch_bandwidth=args.notch_bandwidth,
+        bandpass_lowcut=args.bandpass_lowcut,
+        bandpass_highcut=args.bandpass_highcut,
+        filter_order=args.filter_order,
+    )
     if not hea_files:
         raise ValueError("No usable .hea records after validation")
 

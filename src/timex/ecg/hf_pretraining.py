@@ -6,14 +6,18 @@ import inspect
 import json
 import logging
 import math
+import netrc
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import torch
 import wfdb
+from dotenv import load_dotenv
+from scipy.signal import butter
 from torch.utils.data import Dataset
 from transformers import (
     EarlyStoppingCallback,
@@ -23,6 +27,13 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+from transformers.trainer_utils import get_last_checkpoint
+
+try:
+    from transformers import PatchTSMixerConfig, PatchTSMixerForPretraining
+except ImportError:
+    PatchTSMixerConfig = None
+    PatchTSMixerForPretraining = None
 
 from timex.ecg.preprocessor import ECGSignalProcessor
 
@@ -80,6 +91,127 @@ def split_train_eval(
     eval_files = files_copy[:n_val]
     train_files = files_copy[n_val:]
     return train_files, eval_files
+
+
+def resolve_resume_checkpoint(
+    output_dir: str,
+    resume_from_checkpoint: str | None,
+    auto_resume_from_checkpoint: bool,
+) -> str | None:
+    """Resolve checkpoint path to resume from (explicit or latest in output_dir)."""
+    if resume_from_checkpoint:
+        ckpt_path = Path(resume_from_checkpoint)
+        if not ckpt_path.exists():
+            raise ValueError(f"--resume_from_checkpoint path does not exist: {resume_from_checkpoint}")
+        return str(ckpt_path)
+
+    if not auto_resume_from_checkpoint:
+        return None
+
+    out = Path(output_dir)
+    if not out.exists():
+        return None
+
+    last_ckpt = get_last_checkpoint(str(out))
+    return last_ckpt
+
+
+def detect_wandb_credentials() -> tuple[bool, str]:
+    """
+    Detect whether W&B credentials are likely available.
+
+    Checks:
+    1) WANDB_API_KEY in environment (.env loaded beforehand)
+    2) netrc entries for api.wandb.ai in ~/.netrc or ~/_netrc
+    """
+    api_key = os.environ.get("WANDB_API_KEY", "").strip()
+    if api_key:
+        return True, "WANDB_API_KEY"
+
+    home = Path.home()
+    for netrc_path in (home / ".netrc", home / "_netrc"):
+        if not netrc_path.exists():
+            continue
+        try:
+            hosts = netrc.netrc(str(netrc_path)).hosts
+        except Exception:
+            continue
+
+        if "api.wandb.ai" in hosts:
+            return True, str(netrc_path)
+
+    return False, ""
+
+
+def _sos_default_padlen(sos: np.ndarray) -> int:
+    # Mirror SciPy's sosfiltfilt default padlen computation.
+    # See scipy.signal.sosfiltfilt implementation.
+    zeros_b2 = int(np.sum(np.isclose(sos[:, 2], 0.0)))
+    zeros_a2 = int(np.sum(np.isclose(sos[:, 5], 0.0)))
+    ntaps = 2 * sos.shape[0] + 1 - min(zeros_b2, zeros_a2)
+    return int(3 * ntaps)
+
+
+def _detrend_reduction_samples(detrend_method: str | None) -> int:
+    if detrend_method in {"sliding_median", "sliding_mean"}:
+        # default median_window in preprocessor is 30 -> length reduces by 29
+        return 29
+    if detrend_method == "meeg":
+        # default cutsize in preprocessor is 250 -> length reduces by 500
+        return 500
+    return 0
+
+
+def _detrend_min_samples(detrend_method: str | None) -> int:
+    if detrend_method in {"sliding_median", "sliding_mean"}:
+        return 30
+    if detrend_method == "meeg":
+        return 501
+    return 1
+
+
+def _minimum_required_samples_for_preprocessing(
+    *,
+    fs: int,
+    preprocessing_steps: Sequence[str],
+    detrend_method: str | None,
+    notch_freqs: Sequence[float],
+    notch_bandwidth: float,
+    bandpass_lowcut: float,
+    bandpass_highcut: float,
+    filter_order: int,
+) -> int:
+    """
+    Compute minimum raw sample length needed so configured preprocessing can run
+    without filtfilt/sosfiltfilt padlen failures.
+    """
+    steps = set(preprocessing_steps)
+    detrend_min = _detrend_min_samples(detrend_method) if "detrend" in steps else 1
+    detrend_reduction = _detrend_reduction_samples(detrend_method) if "detrend" in steps else 0
+
+    post_detrend_required = 1
+
+    if "notch" in steps:
+        nyq = 0.5 * float(fs)
+        for freq in notch_freqs:
+            low = (float(freq) - float(notch_bandwidth)) / nyq
+            high = (float(freq) + float(notch_bandwidth)) / nyq
+            if low <= 0.0 or high >= 1.0:
+                # filter will be skipped later due invalid Nyquist placement
+                continue
+            sos = butter(filter_order, [low, high], btype="bandstop", output="sos")
+            post_detrend_required = max(post_detrend_required, _sos_default_padlen(sos) + 1)
+
+    if "bandpass" in steps:
+        nyq = 0.5 * float(fs)
+        low = float(bandpass_lowcut) / nyq
+        high = float(bandpass_highcut) / nyq
+        if 0.0 < low < high < 1.0:
+            sos = butter(filter_order, [low, high], btype="band", output="sos")
+            post_detrend_required = max(post_detrend_required, _sos_default_padlen(sos) + 1)
+
+    raw_required_for_filters = post_detrend_required + detrend_reduction
+    return int(max(detrend_min, raw_required_for_filters, 1))
 
 
 class ECGPretrainingDataset(Dataset):
@@ -454,6 +586,7 @@ class ECGPretrainingTrainer(Trainer):
         cycle_warmup_steps: int = 0,
         cycle_warmup_ratio: float = 0.1,
         min_lr_ratio: float = 0.0,
+        cycle_peak_decay: float = 1.0,
         muon_class_path: str | None = None,
         force_eval_loss: bool = True,
         mask_type: str = "random",
@@ -467,6 +600,7 @@ class ECGPretrainingTrainer(Trainer):
         self.cycle_warmup_steps = int(cycle_warmup_steps)
         self.cycle_warmup_ratio = float(cycle_warmup_ratio)
         self.min_lr_ratio = float(min_lr_ratio)
+        self.cycle_peak_decay = float(cycle_peak_decay)
         self.muon_class_path = muon_class_path
         self.force_eval_loss = bool(force_eval_loss)
 
@@ -590,26 +724,34 @@ class ECGPretrainingTrainer(Trainer):
             warmup_steps = min(max(0, warmup_steps), cycle_steps - 1)
 
         min_lr_ratio = min(max(self.min_lr_ratio, 0.0), 1.0)
+        cycle_peak_decay = max(self.cycle_peak_decay, 0.0)
 
         LOGGER.info(
-            "Using custom scheduler cosine_warmup_restarts | cycle_steps=%d | cycle_warmup_steps=%d | min_lr_ratio=%.5f",
+            "Using custom scheduler cosine_warmup_restarts | cycle_steps=%d | cycle_warmup_steps=%d | min_lr_ratio=%.5f | cycle_peak_decay=%.6f",
             cycle_steps,
             warmup_steps,
             min_lr_ratio,
+            cycle_peak_decay,
         )
 
         def lr_lambda(current_step: int) -> float:
-            step_in_cycle = int(current_step) % cycle_steps
+            step = int(current_step)
+            cycle_idx = step // cycle_steps
+            step_in_cycle = step % cycle_steps
+
+            cycle_peak_scale = cycle_peak_decay ** cycle_idx
 
             if warmup_steps > 0 and step_in_cycle < warmup_steps:
-                return float(step_in_cycle) / float(max(1, warmup_steps))
+                warmup_mult = float(step_in_cycle) / float(max(1, warmup_steps))
+                return cycle_peak_scale * warmup_mult
 
             decay_steps = max(1, cycle_steps - warmup_steps)
             progress = float(step_in_cycle - warmup_steps) / float(decay_steps)
             progress = min(max(progress, 0.0), 1.0)
 
             cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
-            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
+            in_cycle_mult = min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
+            return cycle_peak_scale * in_cycle_mult
 
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         return self.lr_scheduler
@@ -658,15 +800,172 @@ def build_patchtst_model(args: argparse.Namespace) -> PatchTSTForPretraining:
     return PatchTSTForPretraining(config)
 
 
+def build_patchtsmixer_model(args: argparse.Namespace):
+    if PatchTSMixerConfig is None or PatchTSMixerForPretraining is None:
+        raise ImportError(
+            "model_type='patchtsmixer' requested, but PatchTSMixer classes are unavailable in this transformers build. "
+            "Please upgrade transformers to a version that includes PatchTSMixer."
+        )
+
+    if args.model_name_or_path:
+        LOGGER.info("Loading PatchTSMixerForPretraining from %s", args.model_name_or_path)
+        return PatchTSMixerForPretraining.from_pretrained(args.model_name_or_path)
+
+    base_mask_type = args.mask_type if args.mask_type in {"random", "forecast"} else "random"
+
+    # PatchTSMixer uses a slightly different config surface than PatchTST;
+    # we pass a superset and keep only supported args.
+    config_kwargs = {
+        "num_input_channels": args.num_input_channels,
+        "context_length": args.context_length,
+        "patch_length": args.patch_length,
+        "patch_stride": args.patch_stride,
+        "d_model": args.d_model,
+        "dropout": args.dropout,
+        "head_dropout": args.head_dropout,
+        "mode": args.mode,
+        "mask_type": base_mask_type,
+        "random_mask_ratio": args.random_mask_ratio,
+        "num_forecast_mask_patches": args.num_forecast_mask_patches,
+        "channel_attention": args.channel_attention,
+        "channel_consistent_masking": args.channel_consistent_masking,
+        # common alias in mixer-style configs
+        "num_layers": args.num_hidden_layers,
+    }
+
+    supported_kwargs, dropped = _filter_supported_kwargs(PatchTSMixerConfig.__init__, config_kwargs)
+    if dropped:
+        LOGGER.warning("Ignoring unsupported PatchTSMixerConfig arguments: %s", dropped)
+
+    config = PatchTSMixerConfig(**supported_kwargs)
+    return PatchTSMixerForPretraining(config)
+
+
 def build_model(args: argparse.Namespace):
     model_type = args.model_type.lower()
     if model_type == "patchtst":
         return build_patchtst_model(args)
+    if model_type == "patchtsmixer":
+        return build_patchtsmixer_model(args)
 
     raise ValueError(
         f"Unsupported model_type='{args.model_type}'. "
-        "Only 'patchtst' is currently implemented for pretraining in this script."
+        "Supported: 'patchtst', 'patchtsmixer'."
     )
+
+
+def apply_config_json_overrides(args: argparse.Namespace) -> argparse.Namespace:
+    """
+    Load settings from an HF config.json file (including timex_preprocessing)
+    to continue training with consistent model/preprocessing settings.
+
+    CLI-provided data_dir/output_dir remain unchanged.
+    """
+    if not args.config_json:
+        return args
+
+    config_path = Path(args.config_json)
+    if not config_path.exists():
+        raise FileNotFoundError(f"--config_json not found: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    # Top-level model fields (PatchTST / PatchTSMixer)
+    top_map: dict[str, str] = {
+        "model_type": "model_type",
+        "num_input_channels": "num_input_channels",
+        "context_length": "context_length",
+        "patch_length": "patch_length",
+        "patch_stride": "patch_stride",
+        "d_model": "d_model",
+        "num_hidden_layers": "num_hidden_layers",
+        "num_attention_heads": "num_attention_heads",
+        "ffn_dim": "ffn_dim",
+        "head_dropout": "head_dropout",
+        "mode": "mode",
+        "mask_type": "mask_type",
+        "random_mask_ratio": "random_mask_ratio",
+        "num_forecast_mask_patches": "num_forecast_mask_patches",
+        "use_cls_token": "use_cls_token",
+        "channel_attention": "channel_attention",
+        "channel_consistent_masking": "channel_consistent_masking",
+    }
+
+    for cfg_key, arg_key in top_map.items():
+        if cfg_key in cfg:
+            setattr(args, arg_key, cfg[cfg_key])
+
+    # Optional mapping when config uses ff_dropout instead of dropout.
+    if "dropout" in cfg:
+        args.dropout = cfg["dropout"]
+    elif "ff_dropout" in cfg:
+        args.dropout = cfg["ff_dropout"]
+
+    # Optional alias used by some mixer configs.
+    if "num_layers" in cfg and "num_hidden_layers" not in cfg:
+        args.num_hidden_layers = cfg["num_layers"]
+
+    # Optional training/scheduler fields (custom keys we allow in config.json)
+    training_map: dict[str, str] = {
+        "optimizer": "optimizer",
+        "learning_rate": "learning_rate",
+        "weight_decay": "weight_decay",
+        "lr_scheduler_type": "lr_scheduler_type",
+        "warmup_steps": "warmup_steps",
+        "warmup_ratio": "warmup_ratio",
+        "lr_cycle_steps": "lr_cycle_steps",
+        "cycle_warmup_steps": "cycle_warmup_steps",
+        "cycle_warmup_ratio": "cycle_warmup_ratio",
+        "lr_min_ratio": "lr_min_ratio",
+        "lr_cycle_peak_decay": "lr_cycle_peak_decay",
+        "gradient_accumulation_steps": "gradient_accumulation_steps",
+    }
+
+    # Prefer nested timex_training when available (new format), then allow
+    # explicit top-level keys to override for backward compatibility/manual edits.
+    train_cfg = cfg.get("timex_training", {})
+    if isinstance(train_cfg, dict):
+        for cfg_key, arg_key in training_map.items():
+            if cfg_key in train_cfg:
+                setattr(args, arg_key, train_cfg[cfg_key])
+
+    for cfg_key, arg_key in training_map.items():
+        if cfg_key in cfg:
+            setattr(args, arg_key, cfg[cfg_key])
+
+    # timex preprocessing block (if present)
+    pre_cfg = cfg.get("timex_preprocessing", {})
+    if isinstance(pre_cfg, dict):
+        pre_map: dict[str, str] = {
+            "apply_preprocessing": "apply_preprocessing",
+            "preprocessing_steps": "preprocessing_steps",
+            "detrend_method": "detrend_method",
+            "notch_freq": "notch_freq",
+            "notch_bandwidth": "notch_bandwidth",
+            "bandpass_lowcut": "bandpass_lowcut",
+            "bandpass_highcut": "bandpass_highcut",
+            "filter_order": "filter_order",
+            "target_sampling_rate": "target_sampling_rate",
+            "normalize_per_lead": "normalize_per_lead",
+            "min_signal_len_samples": "min_signal_len_samples",
+        }
+        for cfg_key, arg_key in pre_map.items():
+            if cfg_key in pre_cfg:
+                setattr(args, arg_key, pre_cfg[cfg_key])
+
+    # Derive context_length_ms from resolved context_length + sampling_rate.
+    if getattr(args, "context_length", None) is not None and int(args.context_length) > 0:
+        args.context_length = int(args.context_length)
+        args.context_length_ms = int(round(1000.0 * args.context_length / float(args.target_sampling_rate)))
+
+    # Important: do not implicitly set model_name_or_path from config folder.
+    # For continued training we prefer: build model from resolved config values,
+    # then restore full model/optimizer/scheduler from Trainer checkpoint resume.
+    # If users want explicit weight init, they can pass --model_name_or_path.
+
+    LOGGER.info("Loaded training/model defaults from config_json: %s", config_path)
+    return args
 
 
 def build_preprocessing_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -681,6 +980,24 @@ def build_preprocessing_config(args: argparse.Namespace) -> dict[str, Any]:
         "filter_order": args.filter_order,
         "target_sampling_rate": args.target_sampling_rate,
         "normalize_per_lead": args.normalize_per_lead,
+        "min_signal_len_samples": args.min_signal_len_samples,
+    }
+
+
+def build_training_config(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "optimizer": args.optimizer,
+        "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
+        "lr_scheduler_type": args.lr_scheduler_type,
+        "warmup_steps": args.warmup_steps,
+        "warmup_ratio": args.warmup_ratio,
+        "lr_cycle_steps": args.lr_cycle_steps,
+        "cycle_warmup_steps": args.cycle_warmup_steps,
+        "cycle_warmup_ratio": args.cycle_warmup_ratio,
+        "lr_min_ratio": args.lr_min_ratio,
+        "lr_cycle_peak_decay": args.lr_cycle_peak_decay,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
     }
 
 
@@ -709,7 +1026,8 @@ def build_training_args(args: argparse.Namespace, has_eval: bool) -> TrainingArg
         "fp16": args.fp16,
         "bf16": args.bf16,
         "seed": args.seed,
-        "report_to": [],
+        "report_to": ["wandb"] if args.use_wandb else [],
+        "run_name": args.wandb_run_name,
     }
 
     if args.lr_scheduler_type != "cosine_warmup_restarts":
@@ -752,7 +1070,20 @@ def build_training_args(args: argparse.Namespace, has_eval: bool) -> TrainingArg
 def validate_records(
     hea_files: Sequence[Path],
     expected_num_channels: int,
+    *,
+    min_signal_len_samples: int,
+    apply_preprocessing: bool,
+    preprocessing_steps: Sequence[str],
+    detrend_method: str | None,
+    notch_freqs: Sequence[float],
+    notch_bandwidth: float,
+    bandpass_lowcut: float,
+    bandpass_highcut: float,
+    filter_order: int,
 ) -> list[Path]:
+    if min_signal_len_samples <= 0:
+        raise ValueError("min_signal_len_samples must be > 0")
+
     usable: list[Path] = []
 
     for hea_path in hea_files:
@@ -771,6 +1102,39 @@ def validate_records(
                 expected_num_channels,
             )
             continue
+
+        sig_len = int(header.sig_len) if getattr(header, "sig_len", None) is not None else None
+        fs = int(round(float(header.fs))) if getattr(header, "fs", None) is not None else None
+
+        if sig_len is not None and sig_len < min_signal_len_samples:
+            LOGGER.warning(
+                "Skipping %s because signal is too short: sig_len=%s < min_signal_len_samples=%s",
+                hea_path,
+                sig_len,
+                min_signal_len_samples,
+            )
+            continue
+
+        if apply_preprocessing and sig_len is not None and fs is not None:
+            min_required = _minimum_required_samples_for_preprocessing(
+                fs=fs,
+                preprocessing_steps=preprocessing_steps,
+                detrend_method=detrend_method,
+                notch_freqs=notch_freqs,
+                notch_bandwidth=notch_bandwidth,
+                bandpass_lowcut=bandpass_lowcut,
+                bandpass_highcut=bandpass_highcut,
+                filter_order=filter_order,
+            )
+
+            if sig_len < min_required:
+                LOGGER.warning(
+                    "Skipping %s because signal is too short: sig_len=%s < min_required=%s",
+                    hea_path,
+                    sig_len,
+                    min_required,
+                )
+                continue
 
         usable.append(hea_path)
 
@@ -798,8 +1162,14 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
 
     # Model selection
-    parser.add_argument("--model_type", type=str, default="patchtst", choices=["patchtst"])
+    parser.add_argument("--model_type", type=str, default="patchtst", choices=["patchtst", "patchtsmixer"])
     parser.add_argument("--model_name_or_path", type=str, default=None)
+    parser.add_argument(
+        "--config_json",
+        type=str,
+        default=None,
+        help="Optional HF config.json to restore model/preprocessing settings for continued training.",
+    )
 
     # Input shape / preprocessing
     parser.add_argument("--num_input_channels", type=int, default=12)
@@ -811,6 +1181,12 @@ def make_arg_parser() -> argparse.ArgumentParser:
         help="Deprecated: context length in samples/ticks. Prefer --context_length_ms.",
     )
     parser.add_argument("--target_sampling_rate", type=int, default=250)
+    parser.add_argument(
+        "--min_signal_len_samples",
+        type=int,
+        default=2000,
+        help="Skip ECG records shorter than this many samples.",
+    )
     parser.add_argument("--windows_per_record", type=int, default=1)
     parser.add_argument("--random_crop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cache_records", action=argparse.BooleanOptionalAction, default=False)
@@ -851,6 +1227,12 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ffn_dim", type=int, default=3840)
     parser.add_argument("--dropout", type=float, default=0.15)
     parser.add_argument("--head_dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="mix_channel",
+        help="Model mode for PatchTSMixer (default: mix_channel). Ignored by PatchTST.",
+    )
     parser.add_argument(
         "--mask_type",
         type=str,
@@ -954,6 +1336,15 @@ def make_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Minimum LR multiplier reached at end of each cosine decay cycle.",
     )
+    parser.add_argument(
+        "--lr_cycle_peak_decay",
+        type=float,
+        default=1.0,
+        help=(
+            "Per-cycle decay factor applied to cycle peak LR for 'cosine_warmup_restarts'. "
+            "1.0 disables peak decay, 0.98 decays peak LR by 2% each cycle."
+        ),
+    )
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--logging_steps", type=int, default=50)
     parser.add_argument("--save_steps", type=int, default=500)
@@ -965,14 +1356,59 @@ def make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--early_stopping_patience", type=int, default=0)
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--use_wandb",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Weights & Biases logging via Transformers Trainer.",
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default="ECG pretraining",
+        help="W&B run title/name.",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default=None,
+        help="Optional W&B project name (exported as WANDB_PROJECT).",
+    )
+    parser.add_argument(
+        "--wandb_disable_code",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Disable W&B code saving/inference (recommended on Windows UNC/mapped drives).",
+    )
+    parser.add_argument(
+        "--wandb_disable_git",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Disable W&B git probing (recommended on Windows UNC/mapped drives).",
+    )
+    parser.add_argument(
+        "--wandb_dir",
+        type=str,
+        default=None,
+        help="Optional directory for W&B local files. Defaults to <output_dir>/wandb.",
+    )
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
+    parser.add_argument(
+        "--auto_resume_from_checkpoint",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If no explicit checkpoint is provided, resume from latest checkpoint in output_dir when available.",
+    )
 
     return parser
 
 
 def main(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    load_dotenv()
     set_seed(args.seed)
+
+    args = apply_config_json_overrides(args)
 
     if args.lr_scheduler_type == "cosine_warmup_restarts":
         if args.lr_cycle_steps < 0:
@@ -983,6 +1419,8 @@ def main(args: argparse.Namespace) -> None:
             raise ValueError("--cycle_warmup_ratio must be >= 0")
         if not (0.0 <= args.lr_min_ratio <= 1.0):
             raise ValueError("--lr_min_ratio must be in [0, 1]")
+        if not (0.0 < args.lr_cycle_peak_decay <= 1.0):
+            raise ValueError("--lr_cycle_peak_decay must be in (0, 1]")
 
     if args.mask_type == "mixed":
         if args.random_proba < 0 or args.forecast_proba < 0:
@@ -1065,6 +1503,15 @@ def main(args: argparse.Namespace) -> None:
         hea_files = validate_records(
             hea_files,
             expected_num_channels=args.num_input_channels,
+            min_signal_len_samples=args.min_signal_len_samples,
+            apply_preprocessing=args.apply_preprocessing,
+            preprocessing_steps=args.preprocessing_steps,
+            detrend_method=args.detrend_method,
+            notch_freqs=args.notch_freq,
+            notch_bandwidth=args.notch_bandwidth,
+            bandpass_lowcut=args.bandpass_lowcut,
+            bandpass_highcut=args.bandpass_highcut,
+            filter_order=args.filter_order,
         )
 
         if not hea_files:
@@ -1115,15 +1562,69 @@ def main(args: argparse.Namespace) -> None:
                 cache_records=args.cache_records,
             )
 
+    if args.use_wandb:
+        try:
+            importlib.import_module("wandb")
+        except ImportError as exc:
+            raise ImportError(
+                "W&B logging is enabled (--use_wandb), but the 'wandb' package is not installed. "
+                "Install it or run with --no-use_wandb."
+            ) from exc
+
+        os.environ.setdefault("WANDB_NAME", args.wandb_run_name)
+        if args.wandb_project:
+            os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
+
+        # Mitigate Windows UNC/mapped-drive path issues in W&B path inference.
+        if args.wandb_disable_code:
+            os.environ.setdefault("WANDB_DISABLE_CODE", "true")
+        if args.wandb_disable_git:
+            os.environ.setdefault("WANDB_DISABLE_GIT", "true")
+
+        wandb_dir = Path(args.wandb_dir) if args.wandb_dir else (Path(args.output_dir) / "wandb")
+        wandb_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("WANDB_DIR", str(wandb_dir))
+        os.environ.setdefault("WANDB_ROOT_DIR", os.getcwd())
+        os.environ.setdefault("WANDB_PROGRAM", Path(__file__).name)
+
+        has_wandb_creds, creds_source = detect_wandb_credentials()
+
+        LOGGER.info("W&B enabled | run_name=%s", args.wandb_run_name)
+        if args.wandb_project:
+            LOGGER.info("W&B project=%s", args.wandb_project)
+        LOGGER.info(
+            "W&B settings | disable_code=%s | disable_git=%s | dir=%s",
+            args.wandb_disable_code,
+            args.wandb_disable_git,
+            wandb_dir,
+        )
+
+        if has_wandb_creds:
+            LOGGER.info("W&B credentials detected via %s", creds_source)
+        else:
+            LOGGER.warning(
+                "W&B is enabled but no credentials were detected. "
+                "Set WANDB_API_KEY in .env (loaded via load_dotenv) or run `wandb login`."
+            )
+
     model = build_model(args)
 
-    # Persist effective preprocessing settings into model config.json
+    # Persist effective preprocessing + training settings into model config.json
     preprocessing_cfg = build_preprocessing_config(args)
+    training_cfg = build_training_config(args)
     if getattr(model, "config", None) is not None:
         model.config.timex_preprocessing = preprocessing_cfg
+        model.config.timex_training = training_cfg
+
+        # Also mirror selected training keys at top-level for convenient manual reuse.
+        for cfg_key, cfg_value in training_cfg.items():
+            setattr(model.config, cfg_key, cfg_value)
+
         if memmap_metadata is not None:
             model.config.timex_memmap_metadata = memmap_metadata
-        LOGGER.info("Attached preprocessing settings to model config under key: timex_preprocessing")
+        LOGGER.info(
+            "Attached settings to model config under keys: timex_preprocessing, timex_training"
+        )
 
     training_args = build_training_args(args, has_eval=eval_dataset is not None)
     collator = ECGPretrainingCollator()
@@ -1138,11 +1639,16 @@ def main(args: argparse.Namespace) -> None:
             else f"per-cycle {args.cycle_warmup_ratio:.4f} ratio"
         )
 
+    scheduler_extra = ""
+    if args.lr_scheduler_type == "cosine_warmup_restarts":
+        scheduler_extra = f" | lr_min_ratio={args.lr_min_ratio:.5f} | lr_cycle_peak_decay={args.lr_cycle_peak_decay:.6f}"
+
     LOGGER.info(
-        "Optimizer=%s | Scheduler=%s | Warmup=%s",
+        "Optimizer=%s | Scheduler=%s | Warmup=%s%s",
         args.optimizer,
         args.lr_scheduler_type,
         warmup_desc,
+        scheduler_extra,
     )
     if args.mask_type == "mixed":
         prob_sum = args.random_proba + args.forecast_proba
@@ -1171,6 +1677,7 @@ def main(args: argparse.Namespace) -> None:
         cycle_warmup_steps=args.cycle_warmup_steps,
         cycle_warmup_ratio=args.cycle_warmup_ratio,
         min_lr_ratio=args.lr_min_ratio,
+        cycle_peak_decay=args.lr_cycle_peak_decay,
         muon_class_path=args.muon_class_path,
         mask_type=args.mask_type,
         random_proba=args.random_proba,
@@ -1191,7 +1698,17 @@ def main(args: argparse.Namespace) -> None:
     else:
         LOGGER.info("Training on device: %s", device)
 
-    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    resume_checkpoint = resolve_resume_checkpoint(
+        output_dir=args.output_dir,
+        resume_from_checkpoint=args.resume_from_checkpoint,
+        auto_resume_from_checkpoint=args.auto_resume_from_checkpoint,
+    )
+    if resume_checkpoint:
+        LOGGER.info("Resuming training from checkpoint: %s", resume_checkpoint)
+    else:
+        LOGGER.info("Starting training from scratch (no checkpoint resume)")
+
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
 
     trainer.save_model(args.output_dir)
     trainer.save_state()
